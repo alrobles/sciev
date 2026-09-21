@@ -1,0 +1,357 @@
+"""reverse_jev.eval — decision evaluation harness.
+
+Modes:
+  E0 pairs  : --pairs pairs_L3.jsonl   (ecoreasoner ids; R1 vs denoise_loss)
+  decisions : --data decisions.jsonl   (System-One labels; acc/Brier/ECE)
+  remote    : --remote URL             (same decisions against any
+              /v1/systemone endpoint — Jev API or a local reverse-jev server)
+
+Examples:
+  python -m reverse_jev.eval --ckpt runs/f0/checkpoint-g10000/model.pt \
+      --pairs /beegfs/.../pairs_L3.jsonl --tokenizer GSAI-ML/LLaDA-8B-Instruct
+  python -m reverse_jev.eval --remote https://api.typesafe.ai \
+      --api-key-file ~/env/typesafe-key --data evals/eco_decisions.jsonl
+"""
+import argparse
+import json
+import random
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from .data import load_pairs, iter_decisions, split_dev_test
+
+
+# ---------------- metrics ----------------
+
+def ece(confs, corrects, n_bins=10):
+    """Expected calibration error: mean |bucket_conf - bucket_acc|."""
+    confs = np.asarray(confs, dtype=float)
+    corrects = np.asarray(corrects, dtype=float)
+    edges = np.linspace(0, 1, n_bins + 1)
+    total = 0.0
+    for i in range(n_bins):
+        m = (confs > edges[i]) & (confs <= edges[i + 1]) if i else \
+            (confs >= edges[i]) & (confs <= edges[i + 1])
+        if m.any():
+            total += m.mean() * abs(confs[m].mean() - corrects[m].mean())
+    return float(total)
+
+
+def brier_multi(probs, labels):
+    """Mean squared error between predicted distribution and one-hot label.
+    Ragged-safe: option counts differ across question types."""
+    total = 0.0
+    for p_row, gold in zip(probs, labels):
+        p = np.asarray(p_row, dtype=float)
+        y = np.zeros_like(p)
+        y[gold] = 1.0
+        total += float(((p - y) ** 2).sum())
+    return total / max(len(labels), 1)
+
+
+def automation_rate(confs, corrects, err_budget=0.05):
+    """Largest fraction of decisions auto-accepted while keeping error <= budget.
+
+    Sort by confidence desc, find the largest prefix with mean error <= budget.
+    """
+    order = np.argsort(-np.asarray(confs, dtype=float))
+    errs = 1.0 - np.asarray(corrects, dtype=float)[order]
+    cum = np.cumsum(errs) / np.arange(1, len(errs) + 1)
+    ok = np.where(cum <= err_budget)[0]
+    return float((ok[-1] + 1) / len(errs)) if len(ok) else 0.0
+
+
+# ---------------- local model paths ----------------
+
+def denoise_loss(model, seq, mask_p, rng, mask_id):
+    """Legacy ecoreasoner pairwise scorer (suite_smoke_v2): CE over masked
+    positions of ctx+candidate."""
+    T = seq.shape[0]
+    n = max(1, int(mask_p * T))
+    idx = torch.tensor(rng.sample(range(T), n), dtype=torch.long, device=seq.device)
+    masked = seq.clone()
+    masked[idx] = mask_id
+    logits = model(masked.unsqueeze(0)).squeeze(0)
+    return F.cross_entropy(logits[idx], seq[idx])
+
+
+def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
+    """E0: compare readouts on (ctx, ok, bad) id triples.
+
+    r1_first: ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (Jev-style)
+    legacy  : denoise_loss(ctx+ok) < denoise_loss(ctx+bad)  (Fase-3 style)
+    """
+    rng = random.Random(seed)
+    torch.manual_seed(seed)
+    mask_id = model.mask_id
+    r1_wins = leg_wins = 0
+    r1_deltas, leg_deltas = [], []
+    n_first_token_diff = 0
+    t0 = time.time()
+    with torch.no_grad():
+        for ctx, ok, bad in pairs:
+            if ok[0] != bad[0]:
+                n_first_token_diff += 1
+            # R1: single mask slot right after ctx; option = first token
+            seq = torch.tensor(ctx + [mask_id], dtype=torch.long, device=device)
+            row = model(seq.unsqueeze(0)).squeeze(0)[-1]
+            d_r1 = (row[ok[0]] - row[bad[0]]).item()
+            r1_wins += d_r1 > 0
+            r1_deltas.append(d_r1)
+            # legacy pseudo-likelihood
+            l_ok = denoise_loss(model, torch.tensor(ctx + ok, dtype=torch.long,
+                                                    device=device), mask_p, rng, mask_id).item()
+            l_bad = denoise_loss(model, torch.tensor(ctx + bad, dtype=torch.long,
+                                                     device=device), mask_p, rng, mask_id).item()
+            leg_wins += l_ok < l_bad
+            leg_deltas.append(l_bad - l_ok)
+    n = len(pairs)
+    return {
+        "n_pairs": n,
+        "first_token_differs": n_first_token_diff,
+        "r1_first_token": {"pairwise_acc": round(r1_wins / n, 4),
+                           "mean_delta": round(float(np.mean(r1_deltas)), 5)},
+        "legacy_denoise": {"pairwise_acc": round(leg_wins / n, 4),
+                           "mean_delta": round(float(np.mean(leg_deltas)), 5)},
+        "elapsed_s": round(time.time() - t0, 2),
+    }
+
+
+def eval_decisions_local(model, tok, rows, device, temperature=1.0, max_len=768):
+    """Score labeled System-One decisions with the R1 readout."""
+    from .readout import (predict_choice, predict_noul, predict_score)
+
+    per_type = {}
+    recs = []
+    for state, qid, q, label in rows:
+        qt = q["type"]
+        if qt == "choice":
+            names = list(q["criteria"].keys())
+            ans = predict_choice(model, tok, state, q["instructions"],
+                                 q["criteria"], temperature, max_len, device)
+            probs = [ans["probabilities"][n] for n in names]
+            pred, gold = names.index(ans["choice"]), names.index(label)
+        elif qt == "noul":
+            ans = predict_noul(model, tok, state, q["instructions"],
+                               temperature, max_len, device)
+            probs = [ans["noul"], 1 - ans["noul"]]
+            gold = 0 if label in (True, "true", "yes") else 1
+            pred = 0 if ans["noul"] >= 0.5 else 1
+        elif qt == "score":
+            ans = predict_score(model, tok, state, q["instructions"],
+                                q["criteria"], temperature, max_len, device)
+            probs = [ans["probabilities"][str(i)] for i in range(len(q["criteria"]))]
+            pred = int(np.argmax(probs))
+            gold = int(label)
+        else:
+            continue
+        conf = max(probs)
+        correct = int(pred == gold)
+        recs.append({"type": qt, "probs": probs, "gold": gold,
+                     "conf": conf, "correct": correct})
+        per_type.setdefault(qt, []).append(recs[-1])
+
+    def summarize(rs):
+        return {
+            "n": len(rs),
+            "accuracy": round(float(np.mean([r["correct"] for r in rs])), 4),
+            "brier": round(brier_multi([r["probs"] for r in rs],
+                                       [r["gold"] for r in rs]), 4),
+            "ece": round(ece([r["conf"] for r in rs],
+                             [r["correct"] for r in rs]), 4),
+            "automation@5%err": round(automation_rate(
+                [r["conf"] for r in rs], [r["correct"] for r in rs]), 4),
+        }
+
+    out = {"overall": summarize(recs), "temperature": temperature}
+    for t, rs in per_type.items():
+        out[t] = summarize(rs)
+    return out, recs
+
+
+def fit_temperature(model, tok, dev_rows, device, max_len=768):
+    """Grid-search temperature minimizing CE on dev decisions (held-out)."""
+    from .readout import r1_logits, build_sequence, option_id_sets, noul_id_sets
+
+    examples = []
+    with torch.no_grad():
+        for state, qid, q, label in dev_rows:
+            qt = q["type"]
+            ids, mpos = build_sequence(tok, state, q["instructions"],
+                                       model.mask_id, max_len)
+            seq = torch.tensor(ids, dtype=torch.long, device=device)
+            if qt == "choice":
+                names = list(q["criteria"].keys())
+                sets = [option_id_sets(tok, n) for n in names]
+                gold = names.index(label)
+            elif qt == "noul":
+                yes, no = noul_id_sets(tok)
+                sets = [yes, no]
+                gold = 0 if label in (True, "true", "yes") else 1
+            elif qt == "score":
+                sets = [option_id_sets(tok, str(i))
+                        for i in range(len(q["criteria"]))]
+                gold = int(label)
+            else:
+                continue
+            lg = r1_logits(model, seq, mpos, sets, temperature=1.0)
+            examples.append((lg, gold))
+    if not examples:
+        return 1.0
+    best_t, best_loss = 1.0, float("inf")
+    for t in np.linspace(0.25, 8.0, 64):
+        l = 0.0
+        for lg, gold in examples:
+            l += F.cross_entropy((lg / t).unsqueeze(0),
+                                 torch.tensor([gold], device=lg.device)).item()
+        if l < best_loss:
+            best_loss, best_t = l, float(t)
+    return best_t
+
+
+# ---------------- remote (Jev / any /v1/systemone) ----------------
+
+def eval_decisions_remote(rows, base_url, api_key, model_name="jev-latest",
+                          timeout=120):
+    """Run labeled decisions against any System One endpoint."""
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/v1/systemone"
+    by_state = {}
+    for state, qid, q, label in rows:
+        by_state.setdefault(state, {"questions": {}, "labels": {}})
+        qq = {k: v for k, v in q.items() if k != "label"}
+        by_state[state]["questions"][qid] = qq
+        by_state[state]["labels"][qid] = label
+
+    per_type, recs = {}, []
+    for state, pack in by_state.items():
+        body = json.dumps({"state": state, "model": model_name,
+                           "questions": pack["questions"]}).encode()
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = json.loads(r.read())
+        for qid, ans in resp["answers"].items():
+            q = pack["questions"][qid]
+            label = pack["labels"][qid]
+            qt, gold = q["type"], None
+            if qt == "choice":
+                names = list(q["criteria"].keys())
+                probs = [ans["probabilities"].get(n, 0.0) for n in names]
+                pred, gold = names.index(ans["choice"]), names.index(label)
+            elif qt == "noul":
+                probs = [ans["noul"], 1 - ans["noul"]]
+                gold = 0 if label in (True, "true", "yes") else 1
+                pred = 0 if ans["noul"] >= 0.5 else 1
+            elif qt == "score":
+                k = len(q["criteria"])
+                probs = [ans["probabilities"].get(str(i), 0.0) for i in range(k)]
+                pred, gold = int(np.argmax(probs)), int(label)
+            else:
+                continue
+            r = {"type": qt, "probs": probs, "gold": gold,
+                 "conf": max(probs), "correct": int(pred == gold)}
+            recs.append(r)
+            per_type.setdefault(qt, []).append(r)
+
+    def summarize(rs):
+        return {"n": len(rs),
+                "accuracy": round(float(np.mean([r["correct"] for r in rs])), 4),
+                "brier": round(brier_multi([r["probs"] for r in rs],
+                                           [r["gold"] for r in rs]), 4),
+                "ece": round(ece([r["conf"] for r in rs],
+                                 [r["correct"] for r in rs]), 4),
+                "automation@5%err": round(automation_rate(
+                    [r["conf"] for r in rs], [r["correct"] for r in rs]), 4)}
+
+    out = {"overall": summarize(recs), "remote": base_url, "model": model_name}
+    for t, rs in per_type.items():
+        out[t] = summarize(rs)
+    return out, recs
+
+
+# ---------------- CLI ----------------
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", help="ecoreasoner checkpoint (model.pt)")
+    ap.add_argument("--config", help="harness yaml with model section (optional)")
+    ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
+    ap.add_argument("--pairs", help="ecoreasoner pairs jsonl (E0 mode)")
+    ap.add_argument("--pairs-dir", help="dir with pairs_L*.jsonl (battery)")
+    ap.add_argument("--data", help="System-One decisions jsonl (labeled)")
+    ap.add_argument("--remote", help="base URL of a /v1/systemone endpoint")
+    ap.add_argument("--api-key-file", help="file with API key (remote mode)")
+    ap.add_argument("--model-name", default="jev-latest")
+    ap.add_argument("--mask-p", type=float, default=0.15)
+    ap.add_argument("--temperature", type=float, default=None,
+                    help="fixed T; if omitted with --data, fit on dev split")
+    ap.add_argument("--no-temp-fit", action="store_true")
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--seed", type=int, default=7331)
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args()
+
+    report = {"args": {k: v for k, v in vars(args).items() if k != "api_key_file"}}
+
+    if args.remote:
+        key = Path(args.api_key_file).read_text().strip() if args.api_key_file \
+            else __import__("os").environ.get("TYPESAFE_API_KEY", "local")
+        rows = list(iter_decisions(args.data))
+        out, recs = eval_decisions_remote(rows, args.remote, key, args.model_name)
+        report.update(out)
+        print(json.dumps(out, indent=2))
+    else:
+        if not args.ckpt:
+            ap.error("--ckpt required for local eval")
+        from .model import load_backbone
+        cfg = None
+        if args.config:
+            import yaml
+            cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
+        model = load_backbone(args.ckpt, cfg, device=args.device)
+
+        if args.pairs or args.pairs_dir:
+            if args.pairs_dir:
+                from .data import load_pairs_dir
+                levels = {}
+                for lvl, pairs in load_pairs_dir(args.pairs_dir).items():
+                    levels[lvl] = eval_pairs(model, pairs, args.device,
+                                             args.mask_p, args.seed)
+                    print(json.dumps({"level": lvl, **levels[lvl]}))
+                report["battery"] = levels
+            else:
+                pairs = load_pairs(args.pairs)
+                out = eval_pairs(model, pairs, args.device, args.mask_p, args.seed)
+                report["pairs_eval"] = out
+                print(json.dumps(out, indent=2))
+
+        if args.data:
+            from transformers import AutoTokenizer
+            tok = AutoTokenizer.from_pretrained(args.tokenizer)
+            dev, test = split_dev_test(args.data)
+            temp = args.temperature
+            if temp is None and not args.no_temp_fit:
+                temp = fit_temperature(model, tok, dev, args.device)
+                print(f"[temp] fitted T={temp:.3f} on {len(dev)} dev decisions")
+            temp = temp or 1.0
+            out, recs = eval_decisions_local(model, tok, test, args.device,
+                                             temperature=temp)
+            report["decisions"] = out
+            print(json.dumps(out, indent=2))
+
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(report, indent=2))
+        print(f"[wrote] {args.out}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

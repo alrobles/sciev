@@ -1,0 +1,23 @@
+[project]
+name = "reverse-jev"
+version = "0.1.0"
+description = "Open System-One-style decision models on the EcoReasoner dLLM (MdLMMoE). Typed questions, calibrated probabilities, one forward pass."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.45.0",
+    "numpy>=1.20.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+serve = ["fastapi>=0.100", "uvicorn>=0.23"]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["reverse_jev"]
