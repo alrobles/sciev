@@ -149,6 +149,7 @@ class MdLMMoE(nn.Module):
                  n_experts, k, use_rope=False, weight_tying=False):
         super().__init__()
         self.vocab = vocab
+        self.seq_len = seq_len
         self.use_rope = use_rope
         self.tok_emb = nn.Embedding(vocab + 1, hidden)
         self.pos = None if use_rope else nn.Embedding(seq_len, hidden)

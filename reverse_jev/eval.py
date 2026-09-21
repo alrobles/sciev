@@ -68,41 +68,82 @@ def automation_rate(confs, corrects, err_budget=0.05):
 
 # ---------------- local model paths ----------------
 
+def _clamp_oob(seq, model):
+    """ecoreasoner corpus has stray ids >= vocab (e.g. 126082); the embedding
+    only covers 0..vocab (MASK). Clamp like the trainer's GUARDIA."""
+    return seq.clamp(0, model.mask_id)
+
+
 def denoise_loss(model, seq, mask_p, rng, mask_id):
     """Legacy ecoreasoner pairwise scorer (suite_smoke_v2): CE over masked
     positions of ctx+candidate."""
+    seq = _clamp_oob(seq, model)
     T = seq.shape[0]
     n = max(1, int(mask_p * T))
     idx = torch.tensor(rng.sample(range(T), n), dtype=torch.long, device=seq.device)
     masked = seq.clone()
     masked[idx] = mask_id
     logits = model(masked.unsqueeze(0)).squeeze(0)
-    return F.cross_entropy(logits[idx], seq[idx])
+    target = seq[idx].clamp(0, model.vocab - 1)
+    return F.cross_entropy(logits[idx], target)
+
+
+def span_logprob(model, ctx, cand, device):
+    """r1_span: ctx + [MASK]*len(cand) -> mean logprob of true candidate tokens
+    at the masked positions. The honest dLLM analog of 'score the option':
+    every candidate token predicted simultaneously, conditioned on ctx."""
+    mask_id = model.mask_id
+    seq = torch.tensor(ctx + [mask_id] * len(cand), dtype=torch.long,
+                       device=device)
+    seq = _clamp_oob(seq, model)
+    logits = model(seq.unsqueeze(0)).squeeze(0)
+    pos = torch.arange(len(ctx), len(seq), device=device)
+    tgt = torch.tensor([min(t, model.vocab - 1) for t in cand],
+                       dtype=torch.long, device=device)
+    lp = F.log_softmax(logits[pos].float(), dim=-1)
+    return lp.gather(-1, tgt.unsqueeze(-1)).mean().item()
 
 
 def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
     """E0: compare readouts on (ctx, ok, bad) id triples.
 
-    r1_first: ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (Jev-style)
-    legacy  : denoise_loss(ctx+ok) < denoise_loss(ctx+bad)  (Fase-3 style)
+    r1_first : ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (degenerate if
+               first tokens coincide — reported as diagnostic)
+    r1_span  : mean logprob of cand tokens under all-masked candidate region
+    legacy   : denoise_loss(ctx+ok) < denoise_loss(ctx+bad)  (Fase-3 style)
     """
     rng = random.Random(seed)
     torch.manual_seed(seed)
     mask_id = model.mask_id
-    r1_wins = leg_wins = 0
-    r1_deltas, leg_deltas = [], []
+    # same truncation as suite_smoke_v2: ctx <= seq_len//2, cand <= seq_len//4
+    max_ctx = model.seq_len // 2
+    max_cand = model.seq_len // 4
+    r1_wins = sp_wins = leg_wins = 0
+    r1_deltas, sp_deltas, leg_deltas = [], [], []
     n_first_token_diff = 0
     t0 = time.time()
     with torch.no_grad():
         for ctx, ok, bad in pairs:
+            ctx, ok, bad = ctx[:max_ctx], ok[:max_cand], bad[:max_cand]
+            if len(ctx) < 2 or not ok or not bad:
+                continue
             if ok[0] != bad[0]:
                 n_first_token_diff += 1
             # R1: single mask slot right after ctx; option = first token
             seq = torch.tensor(ctx + [mask_id], dtype=torch.long, device=device)
+            seq = _clamp_oob(seq, model)
             row = model(seq.unsqueeze(0)).squeeze(0)[-1]
-            d_r1 = (row[ok[0]] - row[bad[0]]).item()
+            ok_tok = min(ok[0], model.vocab - 1)
+            bad_tok = min(bad[0], model.vocab - 1)
+            d_r1 = (row[ok_tok] - row[bad_tok]).item()
             r1_wins += d_r1 > 0
             r1_deltas.append(d_r1)
+            # r1_span: all-masked candidate scoring
+            lp_ok = span_logprob(model, ctx, ok, device)
+            lp_bad = span_logprob(model, ctx, bad, device)
+            d_sp = lp_ok - lp_bad
+            sp_wins += d_sp > 0
+            sp_deltas.append(d_sp)
             # legacy pseudo-likelihood
             l_ok = denoise_loss(model, torch.tensor(ctx + ok, dtype=torch.long,
                                                     device=device), mask_p, rng, mask_id).item()
@@ -110,12 +151,14 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
                                                      device=device), mask_p, rng, mask_id).item()
             leg_wins += l_ok < l_bad
             leg_deltas.append(l_bad - l_ok)
-    n = len(pairs)
+    n = len(r1_deltas)
     return {
         "n_pairs": n,
         "first_token_differs": n_first_token_diff,
         "r1_first_token": {"pairwise_acc": round(r1_wins / n, 4),
                            "mean_delta": round(float(np.mean(r1_deltas)), 5)},
+        "r1_span": {"pairwise_acc": round(sp_wins / n, 4),
+                    "mean_delta": round(float(np.mean(sp_deltas)), 5)},
         "legacy_denoise": {"pairwise_acc": round(leg_wins / n, 4),
                            "mean_delta": round(float(np.mean(leg_deltas)), 5)},
         "elapsed_s": round(time.time() - t0, 2),
