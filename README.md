@@ -37,8 +37,15 @@ R2 (Laya-style marker head over full-text options) is stubbed in
 
 ## E0 — the no-training experiment
 
-Does the sliced-softmax readout discriminate better than the Fase-3
-denoise-loss scorer on the same pairs?
+Does a dedicated decision readout discriminate better than the Fase-3
+denoise-loss scorer on the same pairs? Three readouts compared:
+
+- `r1_first_token`: `ctx + [MASK]`, compare logits of each candidate's
+  first token. Diagnostic only — on these batteries `first_token_differs`
+  is 0 (pairs diverge deeper in the span), so this is degenerate.
+- `r1_span`: `ctx + [MASK]*len(cand)`, mean logprob of true candidate
+  tokens at masked positions — the dLLM-native option scorer.
+- `legacy_denoise`: random-mask denoise CE over `ctx + cand` (Fase-3).
 
 ```bash
 python -m reverse_jev.eval \
@@ -47,8 +54,25 @@ python -m reverse_jev.eval \
     --pairs /beegfs/a474r867/ecoreasoner/runs/pairs_hard_v3/pairs_L3.jsonl
 ```
 
-Reports `r1_first_token` vs `legacy_denoise` pairwise_acc on identical pairs.
-Gate: if R1 ≤ legacy at chance, the readout-substrate line falsifies cheap.
+### E0 result (pairs_hard_v3_eval, pairwise_acc)
+
+| ckpt | level | legacy | r1_span |
+|---|---|---|---|
+| f0-span-esqueleto | L0 | 0.540 | **0.600** |
+| | L1 | 0.537 | **0.593** |
+| | L2 | 0.611 | 0.613 |
+| | **L3** | 0.518 | **0.579** |
+| f0-span-v2-weight-tying | L0 | 0.511 | 0.544 |
+| | L1 | 0.506 | 0.522 |
+| | L2 | 0.617 | **0.639** |
+| | **L3** | 0.516 | **0.568** |
+
+**The readout was the bottleneck.** Both checkpoints — which scored
+L3 ≈ 0.52 (chance) under denoise-loss and falsified the inferential
+thesis at the 0.55 gate — jump to L3 ≈ 0.57–0.58 (~3σ over chance at
+n=475) when the candidate span is scored directly under a full mask.
+v4_holdout_clean replication running. Caveat: this measures pairwise
+discrimination, not calibration — RLCD/temperature comes later.
 
 ## Evaluate the real Jev (or any System One endpoint)
 
