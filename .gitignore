@@ -7,3 +7,4 @@ evals/*.json
 !evals/README.md
 wandb/
 .pytest_cache/
+runs/e0/
