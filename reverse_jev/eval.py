@@ -104,14 +104,12 @@ def span_logprob(model, ctx, cand, device):
     return lp.gather(-1, tgt.unsqueeze(-1)).mean().item()
 
 
-def _option_probs(model, head, ctx, ok, bad, device, mode="marker"):
-    """R2: one forward per order. Returns p(gold) for each order and the
-    debiased (order-averaged) probability that 'ok' is the correct option."""
+def _option_logits(model, head, ctx, ok, bad, device, mode="marker"):
+    """R2 forward per order. Returns [logits_a, logits_b] (2-dim tensors)."""
     from .model import marker_layout, spanpool_layout
     mask_id = model.mask_id
-    p_ok = []
-    order_correct = []
-    for opts, gold in (((ok, bad), 0), ((bad, ok), 1)):
+    out = []
+    for opts, _gold in (((ok, bad), 0), ((bad, ok), 1)):
         # fit markers + options inside seq_len
         cap = (model.seq_len - len(ctx) - len(opts)) // len(opts)
         opts = [o[:max(cap, 1)] for o in opts]
@@ -125,16 +123,68 @@ def _option_probs(model, head, ctx, ok, bad, device, mode="marker"):
             feats = h[pos]
         else:
             feats = torch.stack([h[s:e].mean(0) for s, e in bounds])
-        logits = head(feats)
-        p = torch.softmax(logits.float(), dim=-1)
+        out.append(head(feats).float())
+    return out
+
+
+def _option_probs(model, head, ctx, ok, bad, device, mode="marker",
+                  temperature=1.0):
+    """R2: one forward per order. Returns p(gold) for each order and the
+    debiased (order-averaged) probability that 'ok' is the correct option."""
+    logits = _option_logits(model, head, ctx, ok, bad, device, mode)
+    p_ok, order_correct = [], []
+    for lg, gold in zip(logits, (0, 1)):
+        p = torch.softmax(lg / temperature, dim=-1)
         p_ok.append(p[gold].item())
         order_correct.append(int(p.argmax().item() == gold))
-    p_avg = float(np.mean(p_ok))
-    return p_avg, order_correct
+    return float(np.mean(p_ok)), order_correct
+
+
+def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
+                       max_ctx=None, max_cand=None, seed=7331):
+    """Fit scalar T minimizing binary NLL over per-order option logits.
+
+    Dev data only — never the test battery. Gold index is 0 for order A
+    (ok first), 1 for order B (bad first).
+    """
+    max_ctx = max_ctx or model.seq_len // 2
+    max_cand = max_cand or model.seq_len // 4
+    logit_rows, golds = [], []
+    with torch.no_grad():
+        for ctx, ok, bad in pairs:
+            ctx, ok, bad = ctx[:max_ctx], ok[:max_cand], bad[:max_cand]
+            if len(ctx) < 2 or not ok or not bad:
+                continue
+            for lg, gold in zip(
+                    _option_logits(model, head, ctx, ok, bad, device, mode),
+                    (0, 1)):
+                logit_rows.append(lg)
+                golds.append(gold)
+    if not logit_rows:
+        return 1.0
+    L = torch.stack(logit_rows)          # (2N, 2)
+    y = torch.tensor(golds)              # (2N,)
+
+    def nll(t):
+        return float(F.cross_entropy(L / t, y).item())
+
+    # coarse grid + local refine
+    grid = np.concatenate([np.linspace(0.2, 5.0, 97),
+                           np.linspace(5.5, 20.0, 30)])
+    t_best = min(grid, key=nll)
+    lo, hi = max(0.05, t_best * 0.5), t_best * 2.0
+    for _ in range(40):                  # golden-section on log-T
+        a, b = np.log(lo), np.log(hi)
+        c, d = b - (b - a) * 0.618, a + (b - a) * 0.618
+        if nll(np.exp(c)) < nll(np.exp(d)):
+            hi = np.exp(d)
+        else:
+            lo = np.exp(c)
+    return float(np.exp((np.log(lo) + np.log(hi)) / 2))
 
 
 def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
-               r2_mode="marker"):
+               r2_mode="marker", r2_temp=1.0):
     """E0/R2: compare readouts on (ctx, ok, bad) id triples.
 
     r1_first : ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (degenerate if
@@ -179,8 +229,9 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
             sp_deltas.append(d_sp)
             # r2: trained head over option features, both orders
             if head is not None:
-                p_avg, order_correct = _option_probs(model, head, ctx, ok, bad,
-                                                     device, mode=r2_mode)
+                p_avg, order_correct = _option_probs(
+                    model, head, ctx, ok, bad, device, mode=r2_mode,
+                    temperature=r2_temp)
                 r2_p.append(p_avg)
                 r2_corr.append(int(p_avg > 0.5))
                 r2_ord_corr.append(order_correct)
@@ -216,10 +267,29 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
             "flip_rate": round(r2_flips / n, 4),
             "mean_p_gold": round(float(p.mean()), 4),
             "brier": round(float(np.mean((p - 1.0) ** 2)), 4),
+            "nll": round(float(-np.log(np.clip(p, 1e-9, 1)).mean()), 4),
             "ece": round(ece(conf, corr), 4),
             "automation_5pct": round(automation_rate(conf, corr), 4),
+            "temperature": round(r2_temp, 4),
+            "calib_curve": _calib_curve(conf, corr),
         }
     return out
+
+
+def _calib_curve(confs, corrects, n_bins=10):
+    """Reliability bins: [{conf, acc, n}] for plotting."""
+    confs = np.asarray(confs, dtype=float)
+    corrects = np.asarray(corrects, dtype=float)
+    edges = np.linspace(0, 1, n_bins + 1)
+    rows = []
+    for i in range(n_bins):
+        m = (confs > edges[i]) & (confs <= edges[i + 1]) if i else \
+            (confs >= edges[i]) & (confs <= edges[i + 1])
+        if m.any():
+            rows.append({"conf": round(float(confs[m].mean()), 4),
+                         "acc": round(float(corrects[m].mean()), 4),
+                         "n": int(m.sum())})
+    return rows
 
 
 def eval_decisions_local(model, tok, rows, device, temperature=1.0, max_len=768):
@@ -385,6 +455,10 @@ def main():
     ap.add_argument("--head", help="trained DecisionHead state (enables r2 eval)")
     ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
                     default="marker")
+    ap.add_argument("--r2-temp", type=float, default=1.0,
+                    help="fixed temperature for r2 softmax")
+    ap.add_argument("--r2-temp-fit", default=None,
+                    help="dev pairs dir: fit T on it, then evaluate test")
     ap.add_argument("--config", help="harness yaml with model section (optional)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--pairs", help="ecoreasoner pairs jsonl (E0 mode)")
@@ -429,6 +503,17 @@ def main():
         else:
             model, head = load_decision(args.ckpt, cfg, device=args.device)
 
+        r2_temp = args.r2_temp
+        if head is not None and args.r2_temp_fit:
+            from .data import load_pairs_dir
+            dev_pairs = [p for ps in load_pairs_dir(args.r2_temp_fit).values()
+                         for p in ps]
+            r2_temp = fit_r2_temperature(model, head, dev_pairs, args.device,
+                                         mode=args.r2_mode)
+            report["r2_temp_fitted"] = round(r2_temp, 4)
+            print(f"[temp] fitted T={r2_temp:.3f} on "
+                  f"{len(dev_pairs)} dev pairs", file=sys.stderr)
+
         if args.pairs or args.pairs_dir:
             if args.pairs_dir:
                 from .data import load_pairs_dir
@@ -436,13 +521,15 @@ def main():
                 for lvl, pairs in load_pairs_dir(args.pairs_dir).items():
                     levels[lvl] = eval_pairs(model, pairs, args.device,
                                              args.mask_p, args.seed, head=head,
-                                             r2_mode=args.r2_mode)
+                                             r2_mode=args.r2_mode,
+                                             r2_temp=r2_temp)
                     print(json.dumps({"level": lvl, **levels[lvl]}))
                 report["battery"] = levels
             else:
                 pairs = load_pairs(args.pairs)
                 out = eval_pairs(model, pairs, args.device, args.mask_p,
-                                 args.seed, head=head, r2_mode=args.r2_mode)
+                                 args.seed, head=head, r2_mode=args.r2_mode,
+                                 r2_temp=r2_temp)
                 report["pairs_eval"] = out
                 print(json.dumps(out, indent=2))
 

@@ -120,6 +120,19 @@ def train_r2(model, head, pairs, args, device):
         logits = head(feats)
         loss = F.cross_entropy(logits.unsqueeze(0),
                                torch.tensor([gold], device=device))
+        if args.rl > 0:
+            # RCDL-lite: REINFORCE over Gaussian-perturbed distributions,
+            # reward = proper scoring rule (log + 0.75*spherical)
+            G = args.rl_samples
+            noise = torch.randn(G, logits.numel(), device=device) * args.rl_noise
+            noise = noise - noise.mean(dim=-1, keepdim=True)
+            cand = logits.detach().unsqueeze(0) + noise
+            probs = torch.softmax(cand, dim=-1)
+            rewards = torch.stack([_reward(p, gold) for p in probs])
+            adv = rewards - rewards.mean()
+            pg = -(adv.detach() * (noise / (args.rl_noise ** 2))
+                   * logits.unsqueeze(0)).sum(-1).mean()
+            loss = loss + args.rl * pg
         (loss / args.accum).backward()
         if (step + 1) % args.accum == 0:
             lr_scale = min(1.0, (step + 1) / max(1, args.warmup))
