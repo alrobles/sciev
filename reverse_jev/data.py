@@ -39,6 +39,22 @@ def load_pairs_dir(pairs_dir):
     return out
 
 
+def load_decisions_ids(path):
+    """K-way labeled decisions -> [(ctx_ids, [opt_ids...], gold_idx)].
+
+    Format: {"ctx":[int...], "opts":[[int...]...], "gold":int}
+    Emitted by data/build_toolcall_decisions.py.
+    """
+    rows = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if rec.get("ctx") and rec.get("opts") and "gold" in rec:
+            rows.append((rec["ctx"], rec["opts"], int(rec["gold"])))
+    return rows
+
+
 def iter_decisions(path):
     """System-One JSONL -> (state, qid, question_dict, label)."""
     for line in Path(path).read_text().splitlines():

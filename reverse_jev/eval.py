@@ -183,6 +183,54 @@ def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
     return float(np.exp((np.log(lo) + np.log(hi)) / 2))
 
 
+def _r2_row_logits(model, head, ctx, opts, device, mode):
+    """One forward -> (K,) head logits for options in given order."""
+    from .model import marker_layout, spanpool_layout
+    K = len(opts)
+    ctx = ctx[:model.seq_len // 2]
+    cap = max(1, (model.seq_len - len(ctx) - K) // K)
+    opts = [o[:cap] for o in opts]
+    if mode == "marker":
+        ids, pos = marker_layout(ctx, opts, model.mask_id)
+    else:
+        ids, bounds = spanpool_layout(ctx, opts)
+    ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
+    h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
+    feats = (h[pos] if mode == "marker"
+             else torch.stack([h[s:e].mean(0) for s, e in bounds]))
+    return head(feats).float()
+
+
+def fit_r2_temperature_decisions(model, head, rows, device, mode="spanpool"):
+    """Fit scalar T minimizing NLL over K-way decision rows (dev only)."""
+    examples = []
+    with torch.no_grad():
+        for ctx, opts, gold in rows:
+            lg = _r2_row_logits(model, head, ctx, list(opts), device, mode)
+            examples.append((lg, int(gold)))
+    if not examples:
+        return 1.0
+
+    def nll(t):
+        return float(sum(
+            F.cross_entropy((lg / t).unsqueeze(0),
+                            torch.tensor([g], device=lg.device)).item()
+            for lg, g in examples))
+
+    grid = np.concatenate([np.linspace(0.2, 5.0, 97),
+                           np.linspace(5.5, 20.0, 30)])
+    t_best = min(grid, key=nll)
+    lo, hi = max(0.05, t_best * 0.5), t_best * 2.0
+    for _ in range(40):
+        a, b = np.log(lo), np.log(hi)
+        c, d = b - (b - a) * 0.618, a + (b - a) * 0.618
+        if nll(np.exp(c)) < nll(np.exp(d)):
+            hi = np.exp(d)
+        else:
+            lo = np.exp(c)
+    return float(np.exp((np.log(lo) + np.log(hi)) / 2))
+
+
 def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
                r2_mode="marker", r2_temp=1.0):
     """E0/R2: compare readouts on (ctx, ok, bad) id triples.
@@ -274,6 +322,70 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
             "calib_curve": _calib_curve(conf, corr),
         }
     return out
+
+
+def eval_decisions_ids(model, head, rows, device, mode="spanpool",
+                       temperature=1.0, seed=7331):
+    """K-way labeled decisions {ctx, opts[K], gold}: two orders per row.
+
+    Returns acc (debiased mean-p argmax), per-order acc, flip_rate,
+    mean p_gold, brier (K-dim), nll, ece, automation, calib_curve.
+    """
+    from .model import marker_layout, spanpool_layout
+    rng = random.Random(seed)
+    mask_id = model.mask_id
+    max_ctx = model.seq_len // 2
+    p_gold, ord_corr, flips, prob_rows, golds = [], [], 0, [], []
+    with torch.no_grad():
+        for ctx, opts, gold in rows:
+            ctx = ctx[:max_ctx]
+            K = len(opts)
+            cap = max(1, (model.seq_len - len(ctx) - K) // K)
+            opts = [o[:cap] for o in opts]
+            orders = [list(range(K))]
+            perm = list(range(K))
+            rng.shuffle(perm)
+            orders.append(perm)
+            for oi, order in enumerate(orders):
+                ordered = [opts[j] for j in order]
+                gpos = order.index(gold)
+                if mode == "marker":
+                    ids, pos = marker_layout(ctx, ordered, mask_id)
+                else:
+                    ids, bounds = spanpool_layout(ctx, ordered)
+                ids = _clamp_oob(
+                    torch.tensor(ids, dtype=torch.long, device=device), model)
+                h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
+                feats = (h[pos] if mode == "marker"
+                         else torch.stack([h[s:e].mean(0) for s, e in bounds]))
+                p = torch.softmax(head(feats).float() / temperature, dim=-1)
+                if oi == 0:
+                    prob_rows.append(p.tolist())
+                    p_gold.append(p[gpos].item())
+                    golds.append(gpos)
+                else:
+                    flips += int(p.argmax().item()
+                                 != torch.tensor(prob_rows[-1]).argmax().item())
+                ord_corr.append(int(p.argmax().item() == gpos))
+    n = max(len(p_gold), 1)
+    p = np.asarray(p_gold)
+    probs = np.asarray(prob_rows)
+    conf_top = probs.max(axis=-1)
+    corr_top = (probs.argmax(-1) == np.asarray(golds)).astype(float)
+    return {
+        "n": len(p_gold),
+        "acc": round(float(corr_top.mean()), 4),
+        "acc_order_a": round(float(np.mean(ord_corr[0::2])), 4),
+        "acc_order_b": round(float(np.mean(ord_corr[1::2])), 4),
+        "flip_rate": round(flips / n, 4),
+        "mean_p_gold": round(float(p.mean()), 4),
+        "nll": round(float(-np.log(np.clip(p, 1e-9, 1)).mean()), 4),
+        "brier": round(brier_multi(prob_rows, golds), 4),
+        "ece": round(ece(conf_top, corr_top), 4),
+        "automation_5pct": round(automation_rate(conf_top, corr_top), 4),
+        "temperature": round(temperature, 4),
+        "calib_curve": _calib_curve(conf_top, corr_top),
+    }
 
 
 def _calib_curve(confs, corrects, n_bins=10):
@@ -459,10 +571,14 @@ def main():
                     help="fixed temperature for r2 softmax")
     ap.add_argument("--r2-temp-fit", default=None,
                     help="dev pairs dir: fit T on it, then evaluate test")
+    ap.add_argument("--r2-temp-fit-decisions", default=None,
+                    help="dev decisions jsonl: fit T on it, then evaluate")
     ap.add_argument("--config", help="harness yaml with model section (optional)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--pairs", help="ecoreasoner pairs jsonl (E0 mode)")
     ap.add_argument("--pairs-dir", help="dir with pairs_L*.jsonl (battery)")
+    ap.add_argument("--decisions-eval", default=None,
+                    help="K-way decisions jsonl {ctx,opts,gold} (needs --head)")
     ap.add_argument("--data", help="System-One decisions jsonl (labeled)")
     ap.add_argument("--remote", help="base URL of a /v1/systemone endpoint")
     ap.add_argument("--api-key-file", help="file with API key (remote mode)")
@@ -513,6 +629,14 @@ def main():
             report["r2_temp_fitted"] = round(r2_temp, 4)
             print(f"[temp] fitted T={r2_temp:.3f} on "
                   f"{len(dev_pairs)} dev pairs", file=sys.stderr)
+        if head is not None and args.r2_temp_fit_decisions:
+            from .data import load_decisions_ids
+            dev_rows = load_decisions_ids(args.r2_temp_fit_decisions)
+            r2_temp = fit_r2_temperature_decisions(
+                model, head, dev_rows, args.device, mode=args.r2_mode)
+            report["r2_temp_fitted"] = round(r2_temp, 4)
+            print(f"[temp] fitted T={r2_temp:.3f} on "
+                  f"{len(dev_rows)} dev decisions", file=sys.stderr)
 
         if args.pairs or args.pairs_dir:
             if args.pairs_dir:
@@ -532,6 +656,19 @@ def main():
                                  r2_temp=r2_temp)
                 report["pairs_eval"] = out
                 print(json.dumps(out, indent=2))
+
+        if args.decisions_eval:
+            if head is None:
+                ap.error("--decisions-eval requires a trained head "
+                         "(--head or decision.pt with head)")
+            from .data import load_decisions_ids
+            rows = load_decisions_ids(args.decisions_eval)
+            out = eval_decisions_ids(model, head, rows, args.device,
+                                     mode=args.r2_mode, temperature=r2_temp,
+                                     seed=args.seed)
+            report["decisions_eval"] = {
+                "file": args.decisions_eval, **out}
+            print(json.dumps(out, indent=2))
 
         if args.data:
             from transformers import AutoTokenizer

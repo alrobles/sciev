@@ -67,21 +67,22 @@ def _reward(probs, gold):
 
 # ---------------- R2: marker-head training on (ctx, ok, bad) id-pairs --------
 
-def _r2_example(model, ctx, ok, bad, rng, device, mode="marker"):
-    """Build one R2 training example with randomized option order.
+def _r2_example(model, ctx, opts, gold, rng, device, mode="marker"):
+    """Build one R2 training example with a random option permutation.
 
-    marker   : ctx + [M] opt_a + [M] opt_b -> head reads h[marker_pos]
-    spanpool : ctx + opt_a + opt_b         -> head reads mean h[span]
+    marker   : ctx + [M] opt_1 + ... + [M] opt_K -> head reads h[marker]
+    spanpool : ctx + opt_1 + ... + opt_K         -> head reads mean h[span]
     """
     from .model import marker_layout, spanpool_layout
+    K = len(opts)
     max_ctx = model.seq_len // 2
     ctx = ctx[:max_ctx]
-    cap = (model.seq_len - len(ctx) - 2) // 2
-    ok, bad = ok[:cap], bad[:cap]
-    if rng.random() < 0.5:
-        opts, gold = (ok, bad), 0
-    else:
-        opts, gold = (bad, ok), 1
+    cap = max(1, (model.seq_len - len(ctx) - K) // K)
+    opts = [o[:cap] for o in opts]
+    perm = list(range(K))
+    rng.shuffle(perm)
+    opts = [opts[j] for j in perm]
+    gold = perm.index(gold)
     if mode == "marker":
         ids, pos = marker_layout(ctx, opts, model.mask_id)
     else:
@@ -90,8 +91,12 @@ def _r2_example(model, ctx, ok, bad, rng, device, mode="marker"):
     return ids, pos, gold
 
 
-def train_r2(model, head, pairs, args, device):
-    """CE on option logits; randomized option order each epoch."""
+def train_r2(model, head, examples, args, device):
+    """CE on option logits; randomized option order each step.
+
+    examples: [(ctx, [opt_ids...], gold_idx)] — pairs become
+    (ctx, [ok, bad], 0) upstream.
+    """
     import random as _r
     rng = _r.Random(args.seed)
     params = [{"params": head.parameters(), "lr": args.head_lr}]
@@ -104,13 +109,13 @@ def train_r2(model, head, pairs, args, device):
     model.train(not args.freeze)
     head.train()
     t0 = time.time()
-    order = list(range(len(pairs)))
+    order = list(range(len(examples)))
     acc_hist = []
     for step in range(args.steps):
         if step % len(order) == 0:
             rng.shuffle(order)
-        ctx, ok, bad = pairs[order[step % len(order)]]
-        ids, pos, gold = _r2_example(model, ctx, ok, bad, rng, device,
+        ctx, opts, gold = examples[order[step % len(order)]]
+        ids, pos, gold = _r2_example(model, ctx, opts, gold, rng, device,
                                      mode=args.r2_mode)
         h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
         if args.r2_mode == "marker":
@@ -154,6 +159,8 @@ def main():
     ap.add_argument("--data", default=None, help="decisions JSONL (R1 path)")
     ap.add_argument("--pairs-train", default=None,
                     help="dir with pairs_L*.jsonl (R2 marker-head path, ids)")
+    ap.add_argument("--decisions-train", default=None,
+                    help="K-way decisions jsonl {ctx,opts,gold} (R2 path)")
     ap.add_argument("--levels", default="L0,L1,L2,L3",
                     help="comma list of pair levels to train on (R2)")
     ap.add_argument("--freeze", action="store_true",
@@ -184,9 +191,9 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    # ---------- R2 path: marker head on id-pairs, no tokenizer ----------
-    if args.pairs_train:
-        from .data import load_pairs_dir
+    # ---------- R2 path: option head on id-examples, no tokenizer ----------
+    if args.pairs_train or args.decisions_train:
+        from .data import load_pairs_dir, load_decisions_ids
         from .model import DecisionHead
         cfg = None
         if args.config:
@@ -194,18 +201,23 @@ def main():
             cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
         model = load_backbone(args.ckpt, cfg, device=args.device)
         head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)
-        want = set(args.levels.split(","))
-        pairs = [p for lvl, ps in load_pairs_dir(args.pairs_train).items()
-                 if lvl in want for p in ps]
-        if not pairs:
-            raise SystemExit("no pairs loaded from --pairs-train")
-        print(f"[data] {len(pairs)} pairs "
-              f"(levels={sorted(want)}, freeze={args.freeze})")
-        model, head = train_r2(model, head, pairs, args, args.device)
+        examples = []
+        if args.pairs_train:
+            want = set(args.levels.split(","))
+            examples += [(c, [o, b], 0)
+                         for lvl, ps in load_pairs_dir(args.pairs_train).items()
+                         if lvl in want for c, o, b in ps]
+        if args.decisions_train:
+            examples += load_decisions_ids(args.decisions_train)
+        if not examples:
+            raise SystemExit("no examples loaded")
+        print(f"[data] {len(examples)} examples "
+              f"(mode={args.r2_mode}, freeze={args.freeze})")
+        model, head = train_r2(model, head, examples, args, args.device)
         torch.save({"model": model.state_dict(), "head": head.state_dict(),
                     "meta": {"mode": f"r2_{args.r2_mode}",
-                             "levels": sorted(want),
-                             "pairs_train": args.pairs_train}},
+                             "pairs_train": args.pairs_train,
+                             "decisions_train": args.decisions_train}},
                    out_dir / "decision.pt")
         (out_dir / "training_config.json").write_text(
             json.dumps(vars(args), indent=2))
