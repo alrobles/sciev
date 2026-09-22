@@ -157,11 +157,11 @@ def main():
             by_kind.setdefault(r.pop("kind"), []).append(r)
         for kind, rows in by_kind.items():
             fp = out / f"toolcall_{kind}_{tag}.jsonl"
-            fp.write_text("\n".join(json.dumps(r) for r in rows))
+            fp.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
             print(f"[wrote] {fp.name}: {len(rows)}")
         if tag == "eval":
             fp = out / "toolcall_decisions_eval_text.jsonl"
-            fp.write_text("\n".join(json.dumps(r) for r in text_rows))
+            fp.write_text("\n".join(json.dumps(r) for r in text_rows) + "\n")
             print(f"[wrote] {fp.name}: {len(text_rows)}")
 
 

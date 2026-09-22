@@ -167,6 +167,44 @@ predictions concentrate near 0.5 (bin 0.52, n≈1600 → acc 0.54). The
 model is honest about not knowing — which is itself a usable System-One
 signal (route L3 to a slower reasoner).
 
+## Tool-call decisions (ecological domain, eval = held-out lit sources)
+
+`data/build_toolcall_decisions.py` converts the verified ecoreasoner
+tool-call corpus into System-One decisions: `choice` (K=10 tools),
+`noul` (is the proposed call valid?), `score` (0 wrong tool / 1 wrong
+args / 2 correct). Train/dev from `toolcalls_fase3_500` (n=500); eval
+from `lit_gold+pilot4+evolucion` (n=480, distinct sources — no leakage).
+Battery: 2975 train / 525 dev / 3360 eval questions.
+
+f2-spanes-50k + spanpool head, 6000 steps FT on all three kinds, T=1.18
+fit on dev:
+
+| kind | n | acc | chance | flip | brier | ECE | auto@5% |
+|---|---|---|---|---|---|---|---|
+| choice K=10 | 480 | 0.256 | 0.10 | 0.91 | 1.130 | 0.444 | 0.015 |
+| noul K=2 | 1440 | 0.666 | 0.67 base | 0.51 | 0.449 | 0.040 | 0.0 |
+| score K=3 | 1440 | 0.324 | 0.33 | 0.58 | 0.671 | 0.031 | 0.0 |
+
+R1 zero-shot (same backbone, no training) is worse everywhere — choice
+0.069 (below chance), noul 0.339, score 0.331, T=8.0 (≈uniform).
+
+Honest read: real but weak signal on tool *choice* (2.5× chance, still
+order-unstable); noul is near the majority-class rate and score is at
+chance — the backbone lacks the semantic grounding to rank 10 ecological
+tools or grade call correctness. Training was still climbing at 6k steps
+(train_acc ~0.6); this is a floor, not a ceiling.
+
+**Jev comparison blocked:** `api.typesafe.ai` returns HTTP 402 (account
+out of credits — consistent with the API saturation after the Vercel
+launch). The battery + remote harness are ready; one command once the
+account has quota:
+
+```bash
+python -m reverse_jev.eval --remote https://api.typesafe.ai \
+    --api-key-file ~/env/typesafe-key --model-name jev-1.13.0 \
+    --data toolcall_decisions_eval_text.jsonl --out jev_toolcall.json
+```
+
 ## Evaluate the real Jev (or any System One endpoint)
 
 ```bash
