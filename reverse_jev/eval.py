@@ -104,12 +104,36 @@ def span_logprob(model, ctx, cand, device):
     return lp.gather(-1, tgt.unsqueeze(-1)).mean().item()
 
 
-def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
-    """E0: compare readouts on (ctx, ok, bad) id triples.
+def _marker_probs(model, head, ctx, ok, bad, device):
+    """R2: one forward per order. Returns p(gold) for each order and the
+    debiased (order-averaged) probability that 'ok' is the correct option."""
+    from .model import marker_layout
+    mask_id = model.mask_id
+    p_ok = []
+    order_correct = []
+    for opts, gold in (((ok, bad), 0), ((bad, ok), 1)):
+        # fit markers + options inside seq_len
+        cap = (model.seq_len - len(ctx) - len(opts)) // len(opts)
+        opts = [o[:max(cap, 1)] for o in opts]
+        ids, pos = marker_layout(ctx, opts, mask_id)
+        ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
+        h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
+        logits = head(h[pos])
+        p = torch.softmax(logits.float(), dim=-1)
+        p_ok.append(p[gold].item())
+        order_correct.append(int(p.argmax().item() == gold))
+    p_avg = float(np.mean(p_ok))
+    return p_avg, order_correct
+
+
+def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None):
+    """E0/R2: compare readouts on (ctx, ok, bad) id triples.
 
     r1_first : ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (degenerate if
                first tokens coincide — reported as diagnostic)
     r1_span  : mean logprob of cand tokens under all-masked candidate region
+    r2_marker: (only if head given) Laya-style marker head, both option
+               orders; reports order sensitivity + calibration
     legacy   : denoise_loss(ctx+ok) < denoise_loss(ctx+bad)  (Fase-3 style)
     """
     rng = random.Random(seed)
@@ -121,6 +145,7 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
     r1_wins = sp_wins = leg_wins = 0
     r1_deltas, sp_deltas, leg_deltas = [], [], []
     n_first_token_diff = 0
+    r2_p, r2_corr, r2_ord_corr, r2_flips = [], [], [], 0
     t0 = time.time()
     with torch.no_grad():
         for ctx, ok, bad in pairs:
@@ -144,6 +169,14 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
             d_sp = lp_ok - lp_bad
             sp_wins += d_sp > 0
             sp_deltas.append(d_sp)
+            # r2_marker: trained head over option markers, both orders
+            if head is not None:
+                p_avg, order_correct = _marker_probs(model, head, ctx, ok, bad,
+                                                     device)
+                r2_p.append(p_avg)
+                r2_corr.append(int(p_avg > 0.5))
+                r2_ord_corr.append(order_correct)
+                r2_flips += int(order_correct[0] != order_correct[1])
             # legacy pseudo-likelihood
             l_ok = denoise_loss(model, torch.tensor(ctx + ok, dtype=torch.long,
                                                     device=device), mask_p, rng, mask_id).item()
@@ -152,7 +185,7 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
             leg_wins += l_ok < l_bad
             leg_deltas.append(l_bad - l_ok)
     n = len(r1_deltas)
-    return {
+    out = {
         "n_pairs": n,
         "first_token_differs": n_first_token_diff,
         "r1_first_token": {"pairwise_acc": round(r1_wins / n, 4),
@@ -163,6 +196,22 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331):
                            "mean_delta": round(float(np.mean(leg_deltas)), 5)},
         "elapsed_s": round(time.time() - t0, 2),
     }
+    if head is not None:
+        p = np.asarray(r2_p)
+        corr = np.asarray(r2_corr)
+        conf = np.maximum(p, 1.0 - p)
+        oc = np.asarray(r2_ord_corr)
+        out["r2_marker"] = {
+            "pairwise_acc": round(float(corr.mean()), 4),
+            "acc_order_a": round(float(oc[:, 0].mean()), 4),
+            "acc_order_b": round(float(oc[:, 1].mean()), 4),
+            "flip_rate": round(r2_flips / n, 4),
+            "mean_p_gold": round(float(p.mean()), 4),
+            "brier": round(float(np.mean((p - 1.0) ** 2)), 4),
+            "ece": round(ece(conf, corr), 4),
+            "automation_5pct": round(automation_rate(conf, corr), 4),
+        }
+    return out
 
 
 def eval_decisions_local(model, tok, rows, device, temperature=1.0, max_len=768):
@@ -325,6 +374,7 @@ def eval_decisions_remote(rows, base_url, api_key, model_name="jev-latest",
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", help="ecoreasoner checkpoint (model.pt)")
+    ap.add_argument("--head", help="trained DecisionHead state (enables r2_marker)")
     ap.add_argument("--config", help="harness yaml with model section (optional)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--pairs", help="ecoreasoner pairs jsonl (E0 mode)")
@@ -354,12 +404,20 @@ def main():
     else:
         if not args.ckpt:
             ap.error("--ckpt required for local eval")
-        from .model import load_backbone
+        from .model import load_backbone, load_decision, DecisionHead
         cfg = None
         if args.config:
             import yaml
             cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
-        model = load_backbone(args.ckpt, cfg, device=args.device)
+        head = None
+        if args.head:
+            model = load_backbone(args.ckpt, cfg, device=args.device)
+            head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)
+            hsd = torch.load(args.head, map_location="cpu")
+            head.load_state_dict(hsd.get("head", hsd))
+            head.eval()
+        else:
+            model, head = load_decision(args.ckpt, cfg, device=args.device)
 
         if args.pairs or args.pairs_dir:
             if args.pairs_dir:
@@ -367,12 +425,13 @@ def main():
                 levels = {}
                 for lvl, pairs in load_pairs_dir(args.pairs_dir).items():
                     levels[lvl] = eval_pairs(model, pairs, args.device,
-                                             args.mask_p, args.seed)
+                                             args.mask_p, args.seed, head=head)
                     print(json.dumps({"level": lvl, **levels[lvl]}))
                 report["battery"] = levels
             else:
                 pairs = load_pairs(args.pairs)
-                out = eval_pairs(model, pairs, args.device, args.mask_p, args.seed)
+                out = eval_pairs(model, pairs, args.device, args.mask_p,
+                                 args.seed, head=head)
                 report["pairs_eval"] = out
                 print(json.dumps(out, indent=2))
 

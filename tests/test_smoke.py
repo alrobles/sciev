@@ -65,6 +65,47 @@ def test_pairs_eval_runs():
     assert 0.0 <= out["legacy_denoise"]["pairwise_acc"] <= 1.0
 
 
+def test_r2_marker_learnable():
+    """A learnable DecisionHead can separate a planted signal: options whose
+    tokens are all >50 are 'correct'. Proves train->eval plumbing works."""
+    from reverse_jev.model import DecisionHead, marker_layout, load_decision
+    import tempfile, random
+    model = tiny_model()
+    head = DecisionHead(32)
+    rng = random.Random(0)
+    # plant: ok = all tokens >50, bad = all <50 (ids; mask_id=100 unused)
+    pairs = [([5, 6, 7], [51 + i % 40, 60], [10 + i % 40, 20]) for i in range(40)]
+    opt = torch.optim.AdamW(list(head.parameters()) + list(model.parameters()),
+                            lr=1e-3)
+    model.train()
+    for it in range(120):
+        ctx, ok, bad = pairs[it % len(pairs)]
+        opts, gold = ((ok, bad), 0) if rng.random() < 0.5 else ((bad, ok), 1)
+        cap = (model.seq_len - len(ctx) - 2) // 2
+        ids, pos = marker_layout(ctx, [o[:cap] for o in opts], model.mask_id)
+        h = model(torch.tensor(ids).unsqueeze(0), skip_head=True).squeeze(0)
+        logits = head(h[pos])
+        loss = torch.nn.functional.cross_entropy(
+            logits.unsqueeze(0), torch.tensor([gold]))
+        loss.backward()
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+    model.eval()
+    out = rj_eval.eval_pairs(model, pairs[:20], "cpu", head=head)
+    assert "r2_marker" in out
+    assert out["r2_marker"]["pairwise_acc"] >= 0.9  # planted signal is easy
+    # roundtrip through the combined checkpoint format
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "decision.pt"
+        torch.save({"model": model.state_dict(), "head": head.state_dict()}, p)
+        m2, h2 = load_decision(str(p), dict(vocab=100, hidden=32, layers=1,
+                                            heads=2, ff_mult=2, seq_len=64,
+                                            n_experts=1, k=1), device="cpu")
+        assert h2 is not None
+        out2 = rj_eval.eval_pairs(m2, pairs[:5], "cpu", head=h2)
+        assert "r2_marker" in out2
+
+
 def test_metrics():
     # perfectly calibrated: stated confidence equals observed accuracy
     assert abs(rj_eval.ece([1.0, 1.0, 0.0, 0.0], [1, 1, 0, 0])) < 0.01

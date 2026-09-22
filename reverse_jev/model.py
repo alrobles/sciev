@@ -161,7 +161,7 @@ class MdLMMoE(nn.Module):
                      else nn.Linear(hidden, vocab))
         self.apply(_default_init)
 
-    def forward(self, ids, return_hidden=False):
+    def forward(self, ids, return_hidden=False, skip_head=False):
         B, T = ids.shape
         h = self.tok_emb(ids)
         if not self.use_rope:
@@ -169,6 +169,8 @@ class MdLMMoE(nn.Module):
         for b in self.blocks:
             h = b(h)
         h = self.ln_f(h)
+        if skip_head:
+            return h
         logits = self.head(h)
         if return_hidden:
             return logits, h
@@ -196,6 +198,22 @@ class DecisionHead(nn.Module):
 
     def forward(self, h):
         return self.net(h).squeeze(-1)
+
+
+def marker_layout(ctx, options, mask_id):
+    """Laya-style R2 layout: ctx + [M] opt_1 + [M] opt_2 + ...
+
+    Returns (ids, marker_positions). The backbone's own MASK token is the
+    marker — it is already trained as a 'fill me' slot whose hidden state
+    attends bidirectionally to the option that follows it.
+    """
+    ids = list(ctx)
+    pos = []
+    for opt in options:
+        pos.append(len(ids))
+        ids.append(mask_id)
+        ids.extend(opt)
+    return ids, pos
 
 
 DEFAULT_CONFIG = dict(vocab=126080, hidden=768, layers=12, heads=12,
@@ -235,3 +253,20 @@ def load_backbone(ckpt_path, config=None, device="cpu"):
     model.load_state_dict(ck, strict=True)
     model.eval()
     return model
+
+
+def load_decision(ckpt_path, config=None, device="cpu"):
+    """Load a decision checkpoint: backbone + optional trained DecisionHead.
+
+    Accepts either an ecoreasoner {"model": sd} file (returns head=None)
+    or a reverse-jev {"model": sd, "head": sd} file.
+    """
+    raw = torch.load(ckpt_path, map_location="cpu")
+    head_sd = raw.get("head") if isinstance(raw, dict) else None
+    model = load_backbone(ckpt_path, config, device=device)
+    head = None
+    if head_sd is not None:
+        head = DecisionHead(model.tok_emb.embedding_dim).to(device)
+        head.load_state_dict(head_sd)
+        head.eval()
+    return model, head
