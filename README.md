@@ -194,20 +194,20 @@ chance — the backbone lacks the semantic grounding to rank 10 ecological
 tools or grade call correctness. Training was still climbing at 6k steps
 (train_acc ~0.6); this is a floor, not a ceiling.
 
-**Jev-1.13.0 partial run** (672/3360 questions before the account
-hit 402 again — first ~20% of the eval rows, lit_gold-heavy):
+**Jev-1.13.0 full run** (all 3360 questions, 0 request errors):
 
-| kind | n | acc | brier | ECE | auto@5% |
-|---|---|---|---|---|---|
-| choice | 96 | **1.000** | 0.002 | 0.024 | **1.00** |
-| noul | 288 | **0.830** | 0.227 | 0.076 | 0.65 |
-| score | 288 | **0.795** | 0.250 | 0.057 | 0.65 |
+| kind | n | Jev acc | ours | Jev brier | Jev ECE | Jev auto@5% |
+|---|---|---|---|---|---|---|
+| choice | 480 | **1.000** | 0.256 | 0.0005 | 0.005 | **1.00** |
+| noul | 1440 | **0.887** | 0.666 | 0.168 | 0.060 | 0.78 |
+| score | 1440 | **0.919** | 0.324 | 0.125 | 0.059 | 0.93 |
+| overall | 3360 | **0.917** | ~0.45 | 0.126 | 0.051 | **0.90** |
 
-Jev is not incrementally better — it is *solved* on tool choice and
-calibrated enough to automate 65–100% of traffic at a 5% error budget.
-The gap vs our 155M backbone is capacity, not readout.
-
-Rerun the full battery once the account has quota:
+Jev is not incrementally better — tool choice is *solved* (480/480,
+near-deterministic calibrated probabilities) and 90% of all traffic is
+automatable at a 5% error budget. The gap vs our 155M backbone is
+capacity, not readout. This battery is the reference point: an open
+System One that reaches Jev-level on eco tool routing is the bar.
 
 ```bash
 python -m reverse_jev.eval --remote https://api.typesafe.ai \
