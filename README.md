@@ -194,36 +194,20 @@ chance — the backbone lacks the semantic grounding to rank 10 ecological
 tools or grade call correctness. Training was still climbing at 6k steps
 (train_acc ~0.6); this is a floor, not a ceiling.
 
-**Jev-1.13.0 full run** (all 3360 questions, 0 request errors):
-
-| kind | n | Jev acc | ours | Jev brier | Jev ECE | Jev auto@5% |
-|---|---|---|---|---|---|---|
-| choice | 480 | **1.000** | 0.256 | 0.0005 | 0.005 | **1.00** |
-| noul | 1440 | **0.887** | 0.666 | 0.168 | 0.060 | 0.78 |
-| score | 1440 | **0.919** | 0.324 | 0.125 | 0.059 | 0.93 |
-| overall | 3360 | **0.917** | ~0.45 | 0.126 | 0.051 | **0.90** |
-
-Jev is not incrementally better — tool choice is *solved* (480/480,
-near-deterministic calibrated probabilities) and 90% of all traffic is
-automatable at a 5% error budget. The gap vs our 155M backbone is
-capacity, not readout. This battery is the reference point: an open
-System One that reaches Jev-level on eco tool routing is the bar.
+We evaluated `jev-1.13.0` internally on the same battery as a
+reference point. Numbers are kept internal — TypeSafe's MCA §2.3(f)
+prohibits publishing benchmark/performance information about the
+service (and §2.3(b) prohibits distilling its outputs). For our own
+model only: tool-call decisions remain far below production-grade
+System One quality; the gap is backbone capacity, not readout.
 
 **OLMo-2-13B distillation (legal path — Apache-2.0 teacher on KU HPC,
 letter-logprob extraction via Ollama):** soft labels joined by qid,
 KL+CE (soft_weight 0.4, T=2). Null result — choice 0.269 (+0.01),
 noul 0.662, score 0.319. Teacher-gold agreement itself is 0.92/0.67/0.50
 (eval): the bottleneck is backbone capacity, not label softness.
-Note: TypeSafe MCA §2.3(b) prohibits distilling Jev outputs — Jev is
-used here only as an eval reference; the teacher is OLMo-2.
 
-```bash
-python -m reverse_jev.eval --remote https://api.typesafe.ai \
-    --api-key-file ~/env/typesafe-key --model-name jev-1.13.0 \
-    --data toolcall_decisions_eval_text.jsonl --out jev_toolcall.json
-```
-
-## Evaluate the real Jev (or any System One endpoint)
+## Evaluate a System One endpoint (internal use)
 
 ```bash
 python -m reverse_jev.eval --remote https://api.typesafe.ai \
@@ -231,7 +215,9 @@ python -m reverse_jev.eval --remote https://api.typesafe.ai \
 ```
 
 Reports accuracy / Brier / ECE / automation@5%-error per question type —
-the same numbers our local model reports, so comparisons are apples-to-apples.
+the same numbers our local model reports, so comparisons are
+apples-to-apples. For remote services, keep results internal: their
+terms typically prohibit publishing performance numbers.
 
 ## Convert ecoreasoner pairs to decision data
 
