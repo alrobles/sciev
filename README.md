@@ -54,25 +54,41 @@ python -m reverse_jev.eval \
     --pairs /beegfs/a474r867/ecoreasoner/runs/pairs_hard_v3/pairs_L3.jsonl
 ```
 
-### E0 result (pairs_hard_v3_eval, pairwise_acc)
+### E0 result — pairwise_acc, `r1_span` vs `legacy_denoise`
 
-| ckpt | level | legacy | r1_span |
-|---|---|---|---|
-| f0-span-esqueleto | L0 | 0.540 | **0.600** |
-| | L1 | 0.537 | **0.593** |
-| | L2 | 0.611 | 0.613 |
-| | **L3** | 0.518 | **0.579** |
-| f0-span-v2-weight-tying | L0 | 0.511 | 0.544 |
-| | L1 | 0.506 | 0.522 |
-| | L2 | 0.617 | **0.639** |
-| | **L3** | 0.516 | **0.568** |
+pairs_hard_v3_eval (n≈500/level) / pairs_hard_v4_holdout_clean (n≈1900/level):
 
-**The readout was the bottleneck.** Both checkpoints — which scored
-L3 ≈ 0.52 (chance) under denoise-loss and falsified the inferential
-thesis at the 0.55 gate — jump to L3 ≈ 0.57–0.58 (~3σ over chance at
-n=475) when the candidate span is scored directly under a full mask.
-v4_holdout_clean replication running. Caveat: this measures pairwise
-discrimination, not calibration — RLCD/temperature comes later.
+| ckpt | lvl | v3 legacy | v3 span | v4 legacy | v4 span |
+|---|---|---|---|---|---|
+| f0-span-esqueleto | L0 | 0.540 | **0.600** | 0.555 | **0.606** |
+| | L1 | 0.537 | **0.593** | 0.530 | **0.564** |
+| | L2 | 0.611 | 0.613 | 0.573 | **0.612** |
+| | **L3** | 0.518 | **0.579** | 0.527 | **0.571** |
+| f0-span-v2-weight-tying | L0 | 0.511 | 0.544 | 0.526 | 0.521 |
+| | L1 | 0.506 | 0.522 | 0.512 | **0.543** |
+| | L2 | 0.617 | **0.639** | 0.613 | **0.657** |
+| | **L3** | 0.516 | **0.568** | 0.511 | **0.577** |
+| f0-span-esqueleto-v2-piloto | L0 | 0.501 | 0.535 | 0.524 | 0.525 |
+| | L1 | 0.514 | 0.526 | 0.509 | **0.539** |
+| | L2 | 0.604 | **0.617** | 0.593 | **0.632** |
+| | **L3** | 0.524 | **0.554** | 0.511 | **0.564** |
+| f2-spanes-50k | L0 | 0.568 | **0.716** | 0.572 | **0.741** |
+| | L1 | 0.555 | **0.658** | 0.553 | **0.664** |
+| | L2 | 0.611 | 0.525 | 0.586 | 0.524 |
+| | **L3** | 0.512 | **0.575** | 0.522 | **0.560** |
+
+**The readout was the bottleneck.** All four checkpoints — L3 ≈ 0.51–0.53
+(chance) under denoise-loss, the result that falsified the inferential
+thesis at the 0.55 gate — land at L3 ≈ 0.56–0.58 on both batteries when
+the candidate span is scored under a full mask (~4σ over chance at
+n=1767). f2-spanes-50k additionally reveals strong shallow-discourse
+signal (L0 0.74, L1 0.66 holdout) that denoise-loss hid; its L2
+inversion suggests stage-grammar and option-content trade off under
+different readouts — worth its own probe.
+
+Caveats: pairwise discrimination ≠ calibration (RLCD/temperature come
+later); `r1_span` is mean logprob — length-normalized, not a true joint;
+the same tokenizer/model pair must score both candidates.
 
 ## Evaluate the real Jev (or any System One endpoint)
 
