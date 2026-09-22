@@ -130,7 +130,7 @@ def train_r2(model, head, pairs, args, device):
             probs = torch.softmax(cand, dim=-1)
             rewards = torch.stack([_reward(p, gold) for p in probs])
             adv = rewards - rewards.mean()
-            pg = -(adv.detach() * (noise / (args.rl_noise ** 2))
+            pg = -(adv.detach().unsqueeze(-1) * (noise / (args.rl_noise ** 2))
                    * logits.unsqueeze(0)).sum(-1).mean()
             loss = loss + args.rl * pg
         (loss / args.accum).backward()
@@ -264,7 +264,7 @@ def main():
             rewards = torch.stack([_reward(p, gold) for p in probs])
             adv = rewards - rewards.mean()
             # log-density of each candidate under N(sliced, sigma): const + (z-mu)
-            pg = -(adv.detach() * (noise / (args.rl_noise ** 2)) * sliced.unsqueeze(0)).sum(-1).mean()
+            pg = -(adv.detach().unsqueeze(-1) * (noise / (args.rl_noise ** 2)) * sliced.unsqueeze(0)).sum(-1).mean()
             loss = loss + args.rl * pg
 
         (loss / args.accum).backward()

@@ -30,7 +30,7 @@ run -m reverse_jev.train --pairs-train $TRAIN \
     --ckpt $RUNS/f2-spanes/checkpoint-g50000/model.pt \
     --config $CFG \
     --out $RJ/runs/r2/f2_sp_ft_rl --steps 8000 --accum 8 --lr 2e-5 \
-    --r2-mode spanpool --rl 0.5 --rl-samples 8 --rl-noise 0.4 --device cuda
+    --r2-mode spanpool --rl 0.5 --rl_samples 8 --rl_noise 0.4 --device cuda
 
 # --- calibration: T fitted on DEV, applied to TEST (holdout stays clean) ---
 for TAG in f2_sp_ft f2_sp_ft_rl; do
