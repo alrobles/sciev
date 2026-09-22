@@ -88,14 +88,14 @@ def _r2_example(model, ctx, opts, gold, rng, device, mode="marker"):
     else:
         ids, pos = spanpool_layout(ctx, opts)
     ids = torch.tensor(ids, dtype=torch.long, device=device).clamp(0, model.mask_id)
-    return ids, pos, gold
+    return ids, pos, gold, perm
 
 
 def train_r2(model, head, examples, args, device):
     """CE on option logits; randomized option order each step.
 
-    examples: [(ctx, [opt_ids...], gold_idx)] — pairs become
-    (ctx, [ok, bad], 0) upstream.
+    examples: [(ctx, [opt_ids...], gold_idx)] for pairs, or row dicts
+    {"ctx","opts","gold","qid"?,"soft"?} from load_decisions_ids.
     """
     import random as _r
     rng = _r.Random(args.seed)
@@ -114,9 +114,15 @@ def train_r2(model, head, examples, args, device):
     for step in range(args.steps):
         if step % len(order) == 0:
             rng.shuffle(order)
-        ctx, opts, gold = examples[order[step % len(order)]]
-        ids, pos, gold = _r2_example(model, ctx, opts, gold, rng, device,
-                                     mode=args.r2_mode)
+        ex = examples[order[step % len(order)]]
+        if isinstance(ex, dict):
+            ctx, opts, gold = ex["ctx"], ex["opts"], ex["gold"]
+            soft = ex.get("soft")
+        else:
+            ctx, opts, gold = ex
+            soft = None
+        ids, pos, gold, perm = _r2_example(
+            model, ctx, opts, gold, rng, device, mode=args.r2_mode)
         h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
         if args.r2_mode == "marker":
             feats = h[pos]
@@ -125,6 +131,15 @@ def train_r2(model, head, examples, args, device):
         logits = head(feats)
         loss = F.cross_entropy(logits.unsqueeze(0),
                                torch.tensor([gold], device=device))
+        if soft is not None and args.soft_weight > 0:
+            # distillation: KL(student_T || teacher_T) on the permuted order
+            T = args.soft_temp
+            t = torch.tensor([soft[j] for j in perm], dtype=torch.float,
+                             device=device).clamp_min(1e-9)
+            t = t / t.sum()
+            kl = F.kl_div(F.log_softmax(logits / T, dim=-1),
+                          t, reduction="batchmean") * T * T
+            loss = (1 - args.soft_weight) * loss + args.soft_weight * kl
         if args.rl > 0:
             # RCDL-lite: REINFORCE over Gaussian-perturbed distributions,
             # reward = proper scoring rule (log + 0.75*spherical)
@@ -181,6 +196,10 @@ def main():
                     help="weight of the REINFORCE scoring-rule term (0=CE only)")
     ap.add_argument("--rl_samples", type=int, default=4)
     ap.add_argument("--rl_noise", type=float, default=0.4)
+    ap.add_argument("--soft-labels", default=None,
+                    help="jsonl {qid, soft:[p...]} — KL distillation term")
+    ap.add_argument("--soft-weight", type=float, default=0.5)
+    ap.add_argument("--soft-temp", type=float, default=2.0)
     ap.add_argument("--max-len", type=int, default=768)
     ap.add_argument("--seed", type=int, default=7331)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -209,6 +228,15 @@ def main():
                          if lvl in want for c, o, b in ps]
         if args.decisions_train:
             examples += load_decisions_ids(args.decisions_train)
+        if args.soft_labels:
+            from .data import load_soft_labels
+            soft = load_soft_labels(args.soft_labels)
+            n_soft = 0
+            for ex in examples:
+                if isinstance(ex, dict) and ex.get("qid") in soft:
+                    ex["soft"] = soft[ex["qid"]]
+                    n_soft += 1
+            print(f"[data] soft labels attached: {n_soft}/{len(examples)}")
         if not examples:
             raise SystemExit("no examples loaded")
         print(f"[data] {len(examples)} examples "

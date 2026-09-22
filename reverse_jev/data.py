@@ -40,10 +40,12 @@ def load_pairs_dir(pairs_dir):
 
 
 def load_decisions_ids(path):
-    """K-way labeled decisions -> [(ctx_ids, [opt_ids...], gold_idx)].
+    """K-way labeled decisions -> list of row dicts.
 
-    Format: {"ctx":[int...], "opts":[[int...]...], "gold":int}
-    Emitted by data/build_toolcall_decisions.py.
+    Format: {"ctx":[int...], "opts":[[int...]...], "gold":int,
+             "qid"?:str, "soft"?:[float...]}
+    Emitted by data/build_toolcall_decisions.py; `soft` added by
+    data/teacher_label.py joins.
     """
     rows = []
     for line in Path(path).read_text().splitlines():
@@ -51,8 +53,22 @@ def load_decisions_ids(path):
             continue
         rec = json.loads(line)
         if rec.get("ctx") and rec.get("opts") and "gold" in rec:
-            rows.append((rec["ctx"], rec["opts"], int(rec["gold"])))
+            rows.append({"ctx": rec["ctx"], "opts": rec["opts"],
+                         "gold": int(rec["gold"]),
+                         "qid": rec.get("qid"), "soft": rec.get("soft")})
     return rows
+
+
+def load_soft_labels(path):
+    """Teacher distributions -> {qid: [float...]}."""
+    out = {}
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if rec.get("qid") and rec.get("soft"):
+            out[rec["qid"]] = rec["soft"]
+    return out
 
 
 def iter_decisions(path):

@@ -205,9 +205,10 @@ def fit_r2_temperature_decisions(model, head, rows, device, mode="spanpool"):
     """Fit scalar T minimizing NLL over K-way decision rows (dev only)."""
     examples = []
     with torch.no_grad():
-        for ctx, opts, gold in rows:
-            lg = _r2_row_logits(model, head, ctx, list(opts), device, mode)
-            examples.append((lg, int(gold)))
+        for row in rows:
+            lg = _r2_row_logits(model, head, row["ctx"], list(row["opts"]),
+                                device, mode)
+            examples.append((lg, int(row["gold"])))
     if not examples:
         return 1.0
 
@@ -337,7 +338,8 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
     max_ctx = model.seq_len // 2
     p_gold, ord_corr, flips, prob_rows, golds = [], [], 0, [], []
     with torch.no_grad():
-        for ctx, opts, gold in rows:
+        for row in rows:
+            ctx, opts, gold = row["ctx"], row["opts"], row["gold"]
             ctx = ctx[:max_ctx]
             K = len(opts)
             cap = max(1, (model.seq_len - len(ctx) - K) // K)

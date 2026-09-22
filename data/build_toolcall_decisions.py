@@ -84,7 +84,8 @@ def build(records, tok, rng, tag):
         gold_i = TOOLS.index(tool)
         id_rows.append({"ctx": tok.encode(
             f"{state}\nQuestion: {INSTR_CHOICE}", add_special_tokens=False),
-            "opts": opts_ids, "gold": gold_i, "kind": "choice"})
+            "opts": opts_ids, "gold": gold_i, "kind": "choice",
+            "qid": f"choice_{tag}_{i}"})
         text_by_state.setdefault(state, {"state": state, "questions": {}})
         text_by_state[state]["questions"][f"choice_{tag}_{i}"] = {
             "type": "choice", "instructions": INSTR_CHOICE,
@@ -105,13 +106,15 @@ def build(records, tok, rng, tag):
                 f"{st2}\nQuestion: {INSTR_NOUL}", add_special_tokens=False),
                 "opts": [tok.encode("yes", add_special_tokens=False),
                          tok.encode("no", add_special_tokens=False)],
-                "gold": 0 if valid else 1, "kind": "noul"})
+                "gold": 0 if valid else 1, "kind": "noul",
+                "qid": f"noul_{tag}_{i}_{j}"})
             id_rows.append({"ctx": tok.encode(
                 f"{st2}\nQuestion: rate the proposed call: "
                 + " / ".join(SCORE_LEGEND), add_special_tokens=False),
                 "opts": [tok.encode(x, add_special_tokens=False)
                          for x in SCORE_LEGEND],
-                "gold": score, "kind": "score"})
+                "gold": score, "kind": "score",
+                "qid": f"score_{tag}_{i}_{j}"})
             text_by_state.setdefault(st2, {"state": st2, "questions": {}})
             text_by_state[st2]["questions"][f"noul_{tag}_{i}_{j}"] = {
                 "type": "noul", "instructions": INSTR_NOUL, "label": valid}
@@ -159,10 +162,9 @@ def main():
             fp = out / f"toolcall_{kind}_{tag}.jsonl"
             fp.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
             print(f"[wrote] {fp.name}: {len(rows)}")
-        if tag == "eval":
-            fp = out / "toolcall_decisions_eval_text.jsonl"
-            fp.write_text("\n".join(json.dumps(r) for r in text_rows) + "\n")
-            print(f"[wrote] {fp.name}: {len(text_rows)}")
+        fp = out / f"toolcall_decisions_{tag}_text.jsonl"
+        fp.write_text("\n".join(json.dumps(r) for r in text_rows) + "\n")
+        print(f"[wrote] {fp.name}: {len(text_rows)}")
 
 
 if __name__ == "__main__":

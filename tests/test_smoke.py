@@ -120,10 +120,13 @@ def test_r2_kway_decisions():
     for i in range(30):
         opts = [[10 + (i + j) % 30, 11 + (i + j) % 30] for j in range(4)]
         opts[0] = [60 + i % 30, 61 + i % 30]  # gold at index 0
-        rng_rows.append(([5, 6, 7], opts, 0))
+        rng_rows.append({"ctx": [5, 6, 7], "opts": opts, "gold": 0,
+                         "qid": f"t{i}",
+                         "soft": [0.7, 0.1, 0.1, 0.1]})
     args = SimpleNamespace(seed=0, freeze=False, head_lr=1e-3, lr=1e-3,
                            steps=80, r2_mode="spanpool", rl=0.0,
-                           rl_samples=4, rl_noise=0.1, accum=1, warmup=10)
+                           rl_samples=4, rl_noise=0.1, accum=1, warmup=10,
+                           soft_weight=0.5, soft_temp=2.0)
     model, head = train_r2(model, head, rng_rows, args, "cpu")
     model.eval()
     out = rj_eval.eval_decisions_ids(model, head, rng_rows[:20], "cpu",
@@ -136,8 +139,7 @@ def test_r2_kway_decisions():
     with tempfile.TemporaryDirectory() as d:
         fp = Path(d) / "dec.jsonl"
         fp.write_text("\n".join(
-            json.dumps({"ctx": c, "opts": o, "gold": g})
-            for c, o, g in rng_rows[:5]))
+            json.dumps(r) for r in rng_rows[:5]))
         assert len(load_decisions_ids(fp)) == 5
 
 

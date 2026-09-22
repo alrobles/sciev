@@ -209,6 +209,14 @@ automatable at a 5% error budget. The gap vs our 155M backbone is
 capacity, not readout. This battery is the reference point: an open
 System One that reaches Jev-level on eco tool routing is the bar.
 
+**OLMo-2-13B distillation (legal path — Apache-2.0 teacher on KU HPC,
+letter-logprob extraction via Ollama):** soft labels joined by qid,
+KL+CE (soft_weight 0.4, T=2). Null result — choice 0.269 (+0.01),
+noul 0.662, score 0.319. Teacher-gold agreement itself is 0.92/0.67/0.50
+(eval): the bottleneck is backbone capacity, not label softness.
+Note: TypeSafe MCA §2.3(b) prohibits distilling Jev outputs — Jev is
+used here only as an eval reference; the teacher is OLMo-2.
+
 ```bash
 python -m reverse_jev.eval --remote https://api.typesafe.ai \
     --api-key-file ~/env/typesafe-key --model-name jev-1.13.0 \
