@@ -32,8 +32,10 @@ vs {no,false}; `choice` over option names; `score` over level-index tokens.
 Confidence is a statistic of the distribution: `(p_max − 1/K)/(1 − 1/K)`.
 Temperature scales logits post-hoc (fitted on held-out dev data only).
 
-R2 (Laya-style marker head over full-text options) is stubbed in
-`model.DecisionHead` — the next step once E0 gives signal.
+R2: two trained head variants over backbone hidden states — `marker`
+(Laya-style, reads h at `[MASK]` slots before each option) and
+`spanpool` (reads mean h over each observed option span). Train with
+`reverse_jev.train --pairs-train`; evaluate with `eval --head/--r2-mode`.
 
 ## E0 — the no-training experiment
 
@@ -89,6 +91,49 @@ different readouts — worth its own probe.
 Caveats: pairwise discrimination ≠ calibration (RLCD/temperature come
 later); `r1_span` is mean logprob — length-normalized, not a true joint;
 the same tokenizer/model pair must score both candidates.
+
+## R2 — trained decision head (pairs_hard_v3 train, ~2k pairs, 6–8k steps)
+
+Head `DecisionHead` over backbone hidden states; CE over the 2-option
+softmax, order randomized per step. Both option orders evaluated per
+pair (order-debiased acc + flip_rate = option-order sensitivity).
+
+### marker mode (`[M]` before each option)
+
+| ckpt | lvl | v3_eval | v4_holdout |
+|---|---|---|---|
+| esqueleto (freeze/ft) | all | ~0.50 | ~0.50 — head collapses to position noise (flip ~0.8) |
+| f2-spanes-50k freeze | L2 | **0.730** | **0.751** |
+| f2-spanes-50k ft | L2 | **0.777** | — |
+| f2-spanes-50k ft | L3 | 0.516 | — |
+
+The 10k-step backbone carries nothing readable at mask slots; the 50k
+span-infilling backbone encodes stage grammar linearly at `[MASK]`
+positions. Marker mode wins L2 outright.
+
+### spanpool mode (mean h over each option's tokens)
+
+| ckpt | lvl | v3_eval | v4_holdout |
+|---|---|---|---|
+| esq freeze | L0–L3 | 0.56–0.61 | 0.50–0.62 |
+| f2 freeze | L2 | 0.692 | 0.676 |
+| **f2 ft** | L0 | **0.757** | **0.729** |
+| | L1 | **0.669** | **0.670** |
+| | L2 | 0.712 | **0.706** |
+| | L3 | 0.579 | 0.542 |
+| | flip_rate | 0.29–0.43 | 0.35–0.43 (L3 ~0.89) |
+| | brier | 0.175–0.24 | automation@5%: L0 0.22, L2 0.22 |
+
+**f2-spanes-50k + spanpool + light FT is the best decision model so
+far**: beats every zero-shot readout on every level except marker-ft on
+L2. L3 holds ~0.54–0.58 across all readouts — the inferential ceiling
+of this backbone; stable under debiased ordering but flip_rate ~0.89
+means individual predictions remain order-fragile there.
+
+Lesson so far: readout × backbone interact — token-space pseudo-
+likelihood (r1_span), marker representations (L2 on f2), and pooled
+span features each expose different signals. A Jev-scale model needs
+the training objective to place the signal where the head reads it.
 
 ## Evaluate the real Jev (or any System One endpoint)
 
