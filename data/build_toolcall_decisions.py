@@ -117,7 +117,7 @@ def build(records, tok, rng, tag):
                 "type": "noul", "instructions": INSTR_NOUL, "label": valid}
             text_by_state[st2]["questions"][f"score_{tag}_{i}_{j}"] = {
                 "type": "score", "instructions": "Rate the proposed call.",
-                "criteria": dict(enumerate(SCORE_LEGEND)), "label": score}
+                "criteria": SCORE_LEGEND, "label": score}
     text_rows = list(text_by_state.values())
     return id_rows, text_rows
 

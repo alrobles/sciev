@@ -194,10 +194,20 @@ chance — the backbone lacks the semantic grounding to rank 10 ecological
 tools or grade call correctness. Training was still climbing at 6k steps
 (train_acc ~0.6); this is a floor, not a ceiling.
 
-**Jev comparison blocked:** `api.typesafe.ai` returns HTTP 402 (account
-out of credits — consistent with the API saturation after the Vercel
-launch). The battery + remote harness are ready; one command once the
-account has quota:
+**Jev-1.13.0 partial run** (672/3360 questions before the account
+hit 402 again — first ~20% of the eval rows, lit_gold-heavy):
+
+| kind | n | acc | brier | ECE | auto@5% |
+|---|---|---|---|---|---|
+| choice | 96 | **1.000** | 0.002 | 0.024 | **1.00** |
+| noul | 288 | **0.830** | 0.227 | 0.076 | 0.65 |
+| score | 288 | **0.795** | 0.250 | 0.057 | 0.65 |
+
+Jev is not incrementally better — it is *solved* on tool choice and
+calibrated enough to automate 65–100% of traffic at a 5% error budget.
+The gap vs our 155M backbone is capacity, not readout.
+
+Rerun the full battery once the account has quota:
 
 ```bash
 python -m reverse_jev.eval --remote https://api.typesafe.ai \

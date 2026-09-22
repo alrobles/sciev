@@ -511,15 +511,19 @@ def eval_decisions_remote(rows, base_url, api_key, model_name="jev-latest",
         by_state[state]["questions"][qid] = qq
         by_state[state]["labels"][qid] = label
 
-    per_type, recs = {}, []
+    per_type, recs, errors = {}, [], []
     for state, pack in by_state.items():
         body = json.dumps({"state": state, "model": model_name,
                            "questions": pack["questions"]}).encode()
         req = urllib.request.Request(url, data=body, method="POST", headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            resp = json.loads(r.read())
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                resp = json.loads(r.read())
+        except Exception as e:
+            errors.append({"state": state[:80], "error": str(e)})
+            continue
         for qid, ans in resp["answers"].items():
             q = pack["questions"][qid]
             label = pack["labels"][qid]
@@ -553,7 +557,8 @@ def eval_decisions_remote(rows, base_url, api_key, model_name="jev-latest",
                 "automation@5%err": round(automation_rate(
                     [r["conf"] for r in rs], [r["correct"] for r in rs]), 4)}
 
-    out = {"overall": summarize(recs), "remote": base_url, "model": model_name}
+    out = {"overall": summarize(recs), "remote": base_url, "model": model_name,
+           "n_request_errors": len(errors), "errors": errors[:20]}
     for t, rs in per_type.items():
         out[t] = summarize(rs)
     return out, recs
