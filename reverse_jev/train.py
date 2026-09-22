@@ -67,9 +67,13 @@ def _reward(probs, gold):
 
 # ---------------- R2: marker-head training on (ctx, ok, bad) id-pairs --------
 
-def _r2_example(model, ctx, ok, bad, rng, device):
-    """ctx + [M] opt_a + [M] opt_b with randomized order -> (ids, pos, gold)."""
-    from .model import marker_layout
+def _r2_example(model, ctx, ok, bad, rng, device, mode="marker"):
+    """Build one R2 training example with randomized option order.
+
+    marker   : ctx + [M] opt_a + [M] opt_b -> head reads h[marker_pos]
+    spanpool : ctx + opt_a + opt_b         -> head reads mean h[span]
+    """
+    from .model import marker_layout, spanpool_layout
     max_ctx = model.seq_len // 2
     ctx = ctx[:max_ctx]
     cap = (model.seq_len - len(ctx) - 2) // 2
@@ -78,13 +82,16 @@ def _r2_example(model, ctx, ok, bad, rng, device):
         opts, gold = (ok, bad), 0
     else:
         opts, gold = (bad, ok), 1
-    ids, pos = marker_layout(ctx, opts, model.mask_id)
+    if mode == "marker":
+        ids, pos = marker_layout(ctx, opts, model.mask_id)
+    else:
+        ids, pos = spanpool_layout(ctx, opts)
     ids = torch.tensor(ids, dtype=torch.long, device=device).clamp(0, model.mask_id)
     return ids, pos, gold
 
 
 def train_r2(model, head, pairs, args, device):
-    """CE on marker logits; randomized option order each epoch."""
+    """CE on option logits; randomized option order each epoch."""
     import random as _r
     rng = _r.Random(args.seed)
     params = [{"params": head.parameters(), "lr": args.head_lr}]
@@ -103,9 +110,14 @@ def train_r2(model, head, pairs, args, device):
         if step % len(order) == 0:
             rng.shuffle(order)
         ctx, ok, bad = pairs[order[step % len(order)]]
-        ids, pos, gold = _r2_example(model, ctx, ok, bad, rng, device)
+        ids, pos, gold = _r2_example(model, ctx, ok, bad, rng, device,
+                                     mode=args.r2_mode)
         h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
-        logits = head(h[pos])
+        if args.r2_mode == "marker":
+            feats = h[pos]
+        else:
+            feats = torch.stack([h[s:e].mean(0) for s, e in pos])
+        logits = head(feats)
         loss = F.cross_entropy(logits.unsqueeze(0),
                                torch.tensor([gold], device=device))
         (loss / args.accum).backward()
@@ -133,6 +145,8 @@ def main():
                     help="comma list of pair levels to train on (R2)")
     ap.add_argument("--freeze", action="store_true",
                     help="R2: freeze backbone, train DecisionHead only")
+    ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
+                    default="marker")
     ap.add_argument("--head-lr", type=float, default=1e-3)
     ap.add_argument("--dev", default=None, help="held-out for temperature fit")
     ap.add_argument("--ckpt", default=None, help="init backbone from checkpoint")
@@ -176,7 +190,8 @@ def main():
               f"(levels={sorted(want)}, freeze={args.freeze})")
         model, head = train_r2(model, head, pairs, args, args.device)
         torch.save({"model": model.state_dict(), "head": head.state_dict(),
-                    "meta": {"mode": "r2_marker", "levels": sorted(want),
+                    "meta": {"mode": f"r2_{args.r2_mode}",
+                             "levels": sorted(want),
                              "pairs_train": args.pairs_train}},
                    out_dir / "decision.pt")
         (out_dir / "training_config.json").write_text(

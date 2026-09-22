@@ -104,10 +104,10 @@ def span_logprob(model, ctx, cand, device):
     return lp.gather(-1, tgt.unsqueeze(-1)).mean().item()
 
 
-def _marker_probs(model, head, ctx, ok, bad, device):
+def _option_probs(model, head, ctx, ok, bad, device, mode="marker"):
     """R2: one forward per order. Returns p(gold) for each order and the
     debiased (order-averaged) probability that 'ok' is the correct option."""
-    from .model import marker_layout
+    from .model import marker_layout, spanpool_layout
     mask_id = model.mask_id
     p_ok = []
     order_correct = []
@@ -115,10 +115,17 @@ def _marker_probs(model, head, ctx, ok, bad, device):
         # fit markers + options inside seq_len
         cap = (model.seq_len - len(ctx) - len(opts)) // len(opts)
         opts = [o[:max(cap, 1)] for o in opts]
-        ids, pos = marker_layout(ctx, opts, mask_id)
+        if mode == "marker":
+            ids, pos = marker_layout(ctx, opts, mask_id)
+        else:
+            ids, bounds = spanpool_layout(ctx, opts)
         ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
         h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
-        logits = head(h[pos])
+        if mode == "marker":
+            feats = h[pos]
+        else:
+            feats = torch.stack([h[s:e].mean(0) for s, e in bounds])
+        logits = head(feats)
         p = torch.softmax(logits.float(), dim=-1)
         p_ok.append(p[gold].item())
         order_correct.append(int(p.argmax().item() == gold))
@@ -126,7 +133,8 @@ def _marker_probs(model, head, ctx, ok, bad, device):
     return p_avg, order_correct
 
 
-def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None):
+def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
+               r2_mode="marker"):
     """E0/R2: compare readouts on (ctx, ok, bad) id triples.
 
     r1_first : ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (degenerate if
@@ -169,10 +177,10 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None):
             d_sp = lp_ok - lp_bad
             sp_wins += d_sp > 0
             sp_deltas.append(d_sp)
-            # r2_marker: trained head over option markers, both orders
+            # r2: trained head over option features, both orders
             if head is not None:
-                p_avg, order_correct = _marker_probs(model, head, ctx, ok, bad,
-                                                     device)
+                p_avg, order_correct = _option_probs(model, head, ctx, ok, bad,
+                                                     device, mode=r2_mode)
                 r2_p.append(p_avg)
                 r2_corr.append(int(p_avg > 0.5))
                 r2_ord_corr.append(order_correct)
@@ -201,7 +209,7 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None):
         corr = np.asarray(r2_corr)
         conf = np.maximum(p, 1.0 - p)
         oc = np.asarray(r2_ord_corr)
-        out["r2_marker"] = {
+        out[f"r2_{r2_mode}"] = {
             "pairwise_acc": round(float(corr.mean()), 4),
             "acc_order_a": round(float(oc[:, 0].mean()), 4),
             "acc_order_b": round(float(oc[:, 1].mean()), 4),
@@ -374,7 +382,9 @@ def eval_decisions_remote(rows, base_url, api_key, model_name="jev-latest",
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", help="ecoreasoner checkpoint (model.pt)")
-    ap.add_argument("--head", help="trained DecisionHead state (enables r2_marker)")
+    ap.add_argument("--head", help="trained DecisionHead state (enables r2 eval)")
+    ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
+                    default="marker")
     ap.add_argument("--config", help="harness yaml with model section (optional)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--pairs", help="ecoreasoner pairs jsonl (E0 mode)")
@@ -425,13 +435,14 @@ def main():
                 levels = {}
                 for lvl, pairs in load_pairs_dir(args.pairs_dir).items():
                     levels[lvl] = eval_pairs(model, pairs, args.device,
-                                             args.mask_p, args.seed, head=head)
+                                             args.mask_p, args.seed, head=head,
+                                             r2_mode=args.r2_mode)
                     print(json.dumps({"level": lvl, **levels[lvl]}))
                 report["battery"] = levels
             else:
                 pairs = load_pairs(args.pairs)
                 out = eval_pairs(model, pairs, args.device, args.mask_p,
-                                 args.seed, head=head)
+                                 args.seed, head=head, r2_mode=args.r2_mode)
                 report["pairs_eval"] = out
                 print(json.dumps(out, indent=2))
 

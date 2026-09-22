@@ -216,6 +216,24 @@ def marker_layout(ctx, options, mask_id):
     return ids, pos
 
 
+def spanpool_layout(ctx, options):
+    """R2-spanpool layout: ctx + opt_1 + opt_2 + ... (no markers).
+
+    Returns (ids, span_bounds) where span_bounds = [(start, end), ...].
+    Each option's score comes from the head over its mean hidden state —
+    option tokens are observed, so their hidden states are contextualized
+    content representations (unlike a MASK slot, which is optimized to
+    predict a missing token).
+    """
+    ids = list(ctx)
+    bounds = []
+    for opt in options:
+        start = len(ids)
+        ids.extend(opt)
+        bounds.append((start, len(ids)))
+    return ids, bounds
+
+
 DEFAULT_CONFIG = dict(vocab=126080, hidden=768, layers=12, heads=12,
                       ff_mult=4, seq_len=768, n_experts=8, k=1,
                       use_rope=False, weight_tying=False)
