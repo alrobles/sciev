@@ -163,7 +163,7 @@ def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
     if not logit_rows:
         return 1.0
     L = torch.stack(logit_rows)          # (2N, 2)
-    y = torch.tensor(golds)              # (2N,)
+    y = torch.tensor(golds, device=L.device)  # (2N,)
 
     def nll(t):
         return float(F.cross_entropy(L / t, y).item())
