@@ -239,6 +239,68 @@ DEFAULT_CONFIG = dict(vocab=126080, hidden=768, layers=12, heads=12,
                       use_rope=False, weight_tying=False)
 
 
+class HFBackbone(nn.Module):
+    """Pretrained HF masked-diffusion LM (e.g. GSAI-ML/LLaDA-8B-Instruct)
+    adapted to the MdLMMoE interface used by the decision-head pipeline.
+
+    LLaDA attends bidirectionally by construction (no causal mask), so its
+    hidden states are directly comparable to our backbone's for spanpool.
+    """
+
+    def __init__(self, name_or_path, device="cpu", dtype="bfloat16",
+                 seq_len=2048):
+        super().__init__()
+        from transformers import AutoModelForCausalLM
+        self.hf_name = name_or_path
+        self.hf = AutoModelForCausalLM.from_pretrained(
+            name_or_path, trust_remote_code=True,
+            torch_dtype=getattr(torch, dtype))
+        self.hf.to(device)
+        self.tok_emb = self.hf.get_input_embeddings()
+        cfg = self.hf.config
+        self.vocab = getattr(cfg, "vocab_size", self.tok_emb.num_embeddings)
+        self._mask_id = getattr(cfg, "mask_token_id", self.vocab - 1)
+        self.seq_len = seq_len
+
+    @property
+    def mask_id(self):
+        return self._mask_id
+
+    def _hidden(self, ids):
+        try:
+            out = self.hf(input_ids=ids, output_hidden_states=True)
+        except TypeError:
+            out = self.hf(input_ids=ids)
+        hs = getattr(out, "hidden_states", None)
+        if hs:
+            return hs[-1]
+        inner = getattr(self.hf, "model", None)
+        if inner is not None:
+            try:
+                o = inner(input_ids=ids, output_hidden_states=True)
+            except TypeError:
+                o = inner(input_ids=ids)
+            hs = getattr(o, "hidden_states", None)
+            return hs[-1] if hs else o.last_hidden_state
+        raise RuntimeError("cannot extract hidden states from HF backbone")
+
+    def forward(self, ids, return_hidden=False, skip_head=False):
+        if skip_head:
+            return self._hidden(ids)
+        try:
+            out = self.hf(input_ids=ids,
+                          output_hidden_states=bool(return_hidden))
+        except TypeError:
+            out = self.hf(input_ids=ids)
+        if return_hidden:
+            hs = getattr(out, "hidden_states", None)
+            return out.logits, (hs[-1] if hs else self._hidden(ids))
+        return out.logits
+
+    def n_params(self):
+        return sum(p.numel() for p in self.parameters())
+
+
 def load_backbone(ckpt_path, config=None, device="cpu"):
     """Load an ecoreasoner checkpoint into MdLMMoE.
 
@@ -277,11 +339,16 @@ def load_decision(ckpt_path, config=None, device="cpu"):
     """Load a decision checkpoint: backbone + optional trained DecisionHead.
 
     Accepts either an ecoreasoner {"model": sd} file (returns head=None)
-    or a reverse-jev {"model": sd, "head": sd} file.
+    or a reverse-jev {"model": sd, "head": sd} file — or an HF-adapter
+    checkpoint {"hf_backbone": name, "head": sd} where only the head is
+    stored and the backbone is fetched from HF/the local cache.
     """
     raw = torch.load(ckpt_path, map_location="cpu")
     head_sd = raw.get("head") if isinstance(raw, dict) else None
-    model = load_backbone(ckpt_path, config, device=device)
+    if isinstance(raw, dict) and "hf_backbone" in raw:
+        model = HFBackbone(raw["hf_backbone"], device=device)
+    else:
+        model = load_backbone(ckpt_path, config, device=device)
     head = None
     if head_sd is not None:
         head = DecisionHead(model.tok_emb.embedding_dim).to(device)

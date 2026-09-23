@@ -123,7 +123,7 @@ def _option_logits(model, head, ctx, ok, bad, device, mode="marker"):
             feats = h[pos]
         else:
             feats = torch.stack([h[s:e].mean(0) for s, e in bounds])
-        out.append(head(feats).float())
+        out.append(head(feats.float()).float())
     return out
 
 
@@ -198,7 +198,7 @@ def _r2_row_logits(model, head, ctx, opts, device, mode):
     h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
     feats = (h[pos] if mode == "marker"
              else torch.stack([h[s:e].mean(0) for s, e in bounds]))
-    return head(feats).float()
+    return head(feats.float()).float()
 
 
 def fit_r2_temperature_decisions(model, head, rows, device, mode="spanpool"):
@@ -571,6 +571,9 @@ def eval_decisions_remote(rows, base_url, api_key, model_name="jev-latest",
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", help="ecoreasoner checkpoint (model.pt)")
+    ap.add_argument("--hf-backbone", default=None,
+                    help="HF model name/path (e.g. GSAI-ML/LLaDA-8B-Instruct) "
+                         "instead of an ecoreasoner --ckpt")
     ap.add_argument("--head", help="trained DecisionHead state (enables r2 eval)")
     ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
                     default="marker")
@@ -609,16 +612,19 @@ def main():
         report.update(out)
         print(json.dumps(out, indent=2))
     else:
-        if not args.ckpt:
-            ap.error("--ckpt required for local eval")
-        from .model import load_backbone, load_decision, DecisionHead
+        if not args.ckpt and not args.hf_backbone:
+            ap.error("--ckpt or --hf-backbone required for local eval")
+        from .model import (load_backbone, load_decision, DecisionHead,
+                            HFBackbone)
         cfg = None
         if args.config:
             import yaml
             cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
         head = None
         if args.head:
-            model = load_backbone(args.ckpt, cfg, device=args.device)
+            model = (HFBackbone(args.hf_backbone, device=args.device)
+                     if args.hf_backbone
+                     else load_backbone(args.ckpt, cfg, device=args.device))
             head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)
             hsd = torch.load(args.head, map_location="cpu")
             head.load_state_dict(hsd.get("head", hsd))

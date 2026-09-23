@@ -128,7 +128,7 @@ def train_r2(model, head, examples, args, device):
             feats = h[pos]
         else:
             feats = torch.stack([h[s:e].mean(0) for s, e in pos])
-        logits = head(feats)
+        logits = head(feats.float())
         loss = F.cross_entropy(logits.unsqueeze(0),
                                torch.tensor([gold], device=device))
         if soft is not None and args.soft_weight > 0:
@@ -185,6 +185,9 @@ def main():
     ap.add_argument("--head-lr", type=float, default=1e-3)
     ap.add_argument("--dev", default=None, help="held-out for temperature fit")
     ap.add_argument("--ckpt", default=None, help="init backbone from checkpoint")
+    ap.add_argument("--hf-backbone", default=None,
+                    help="HF model name/path (e.g. GSAI-ML/LLaDA-8B-Instruct) "
+                         "instead of an ecoreasoner --ckpt")
     ap.add_argument("--config", default=None)
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--out", required=True)
@@ -213,12 +216,16 @@ def main():
     # ---------- R2 path: option head on id-examples, no tokenizer ----------
     if args.pairs_train or args.decisions_train:
         from .data import load_pairs_dir, load_decisions_ids
-        from .model import DecisionHead
+        from .model import DecisionHead, HFBackbone
         cfg = None
         if args.config:
             import yaml
             cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
-        model = load_backbone(args.ckpt, cfg, device=args.device)
+        if args.hf_backbone:
+            from .model import HFBackbone
+            model = HFBackbone(args.hf_backbone, device=args.device)
+        else:
+            model = load_backbone(args.ckpt, cfg, device=args.device)
         head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)
         examples = []
         if args.pairs_train:
@@ -242,11 +249,15 @@ def main():
         print(f"[data] {len(examples)} examples "
               f"(mode={args.r2_mode}, freeze={args.freeze})")
         model, head = train_r2(model, head, examples, args, args.device)
-        torch.save({"model": model.state_dict(), "head": head.state_dict(),
-                    "meta": {"mode": f"r2_{args.r2_mode}",
-                             "pairs_train": args.pairs_train,
-                             "decisions_train": args.decisions_train}},
-                   out_dir / "decision.pt")
+        ckpt = {"head": head.state_dict(),
+                "meta": {"mode": f"r2_{args.r2_mode}",
+                         "pairs_train": args.pairs_train,
+                         "decisions_train": args.decisions_train}}
+        if isinstance(model, HFBackbone):
+            ckpt["hf_backbone"] = model.hf_name   # head only; 16GB not stored
+        else:
+            ckpt["model"] = model.state_dict()
+        torch.save(ckpt, out_dir / "decision.pt")
         (out_dir / "training_config.json").write_text(
             json.dumps(vars(args), indent=2))
         print("COMPLETE")

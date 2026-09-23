@@ -1,0 +1,64 @@
+#!/bin/bash
+#SBATCH --job-name=sci_llada
+#SBATCH --partition=sixhour
+#SBATCH --gres=gpu:pro6000:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=96G
+#SBATCH --time=05:50:00
+#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#
+# The capacity test: LLaDA-8B-Instruct (pretrained dLLM, Apache-2.0) as
+# backbone via HFBackbone — freeze (head only) + full-FT spanpool on the
+# scientific decision battery.
+
+set -euo pipefail
+RJ=/beegfs/a474r867/reverse-jev
+ECO=/beegfs/a474r867/ecoreasoner
+BAT=$RJ/data/sci_battery
+RUNS=$RJ/runs/sci
+SIF=$ECO/pytorch-cuda.sif
+OVL=$ECO/blackwell-torch.overlay
+PY=/bb/bwvenv/bin/python
+LLADA=GSAI-ML/LLaDA-8B-Instruct
+mkdir -p "$RUNS"
+export HF_HOME=/beegfs/a474r867/hf-cache
+cd "$RJ"
+
+cat "$BAT"/sci_choice_train.jsonl \
+    "$BAT"/sci_noul_train.jsonl \
+    "$BAT"/sci_score_train.jsonl > "$BAT"/sci_all_train.jsonl
+cat "$BAT"/sci_choice_dev.jsonl \
+    "$BAT"/sci_noul_dev.jsonl \
+    "$BAT"/sci_score_dev.jsonl > "$BAT"/sci_all_dev.jsonl
+
+run() { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
+
+echo "=== TRAIN sci spanpool FREEZE (LLaDA-8B, head only) ==="
+run -m reverse_jev.train \
+    --decisions-train "$BAT/sci_all_train.jsonl" \
+    --hf-backbone "$LLADA" \
+    --r2-mode spanpool --steps 6000 --accum 1 --freeze \
+    --head-lr 3e-4 --warmup 200 --device cuda \
+    --out "$RUNS/sci_llada_freeze"
+
+echo "=== TRAIN sci spanpool FT (LLaDA-8B) ==="
+run -m reverse_jev.train \
+    --decisions-train "$BAT/sci_all_train.jsonl" \
+    --hf-backbone "$LLADA" \
+    --r2-mode spanpool --steps 4000 --accum 1 \
+    --lr 1e-5 --head-lr 3e-4 --warmup 200 --device cuda \
+    --out "$RUNS/sci_llada_ft"
+
+for TAG in sci_llada_freeze sci_llada_ft; do
+    for KIND in choice noul score; do
+        echo "=== EVAL $KIND ($TAG) ==="
+        run -m reverse_jev.eval \
+            --ckpt "$RUNS/$TAG/decision.pt" \
+            --r2-mode spanpool \
+            --r2-temp-fit-decisions "$BAT/sci_all_dev.jsonl" \
+            --decisions-eval "$BAT/sci_${KIND}_eval.jsonl" \
+            --device cuda --out "$RUNS/eval_${TAG}_${KIND}.json"
+    done
+done
+echo "ALL_DONE"
