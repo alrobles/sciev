@@ -176,6 +176,19 @@ class MdLMMoE(nn.Module):
             return logits, h
         return logits
 
+    def hidden_layers(self, ids, layer_idx):
+        """(L,B,T,D) stacked block outputs at the given indices (negatives ok);
+        the last block's output goes through ln_f."""
+        h = self.tok_emb(ids)
+        if not self.use_rope:
+            h = h + self.pos(torch.arange(ids.shape[1], device=ids.device))
+        outs = []
+        for b in self.blocks:
+            h = b(h)
+            outs.append(h)
+        outs[-1] = self.ln_f(outs[-1])
+        return torch.stack([outs[i] for i in layer_idx])
+
     @property
     def mask_id(self):
         return self.vocab
@@ -198,6 +211,57 @@ class DecisionHead(nn.Module):
 
     def forward(self, h):
         return self.net(h).squeeze(-1)
+
+
+class AttnPoolHead(nn.Module):
+    """Attention-pooling span scorer over stacked hidden layers.
+
+    For each layer l, a learned query q_l weights the tokens of each option
+    span (softmax over the span); the per-layer pooled features are
+    concatenated and scored by a shared MLP. Richer than mean-pooling and
+    reads knowledge from middle layers, not only the last one.
+
+    forward(h_layers, bounds): h_layers (L,T,D) -> (K,) logits.
+    """
+
+    def __init__(self, dim, n_layers=1):
+        super().__init__()
+        self.n_layers = n_layers
+        self.q = nn.Parameter(torch.randn(n_layers, dim) * 0.02)
+        self.net = nn.Sequential(
+            nn.LayerNorm(n_layers * dim),
+            nn.Linear(n_layers * dim, dim), nn.GELU(),
+            nn.Linear(dim, 1))
+
+    def forward(self, h_layers, bounds):
+        if h_layers.dim() == 2:
+            h_layers = h_layers.unsqueeze(0)
+        assert h_layers.shape[0] == self.n_layers
+        feats = []
+        for li in range(self.n_layers):
+            q = self.q[li].float()
+            pooled = []
+            for s, e in bounds:
+                span = h_layers[li, s:e].float()
+                w = torch.softmax(span @ q, dim=0)
+                pooled.append((w.unsqueeze(-1) * span).sum(0))
+            feats.append(torch.stack(pooled))
+        return self.net(torch.cat(feats, dim=-1)).squeeze(-1)
+
+
+def forward_feats(model, head, ids, mode, pos, layers=(-1,)):
+    """One forward + head call -> (K,) logits. Shared by train and eval.
+
+    AttnPoolHead reads (L,T,D) stacked layers over span bounds (spanpool
+    mode only); DecisionHead reads marker positions or mean-pooled spans.
+    """
+    if isinstance(head, AttnPoolHead):
+        h = model.hidden_layers(ids.unsqueeze(0), layers).squeeze(1)
+        return head(h, pos)
+    h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
+    feats = (h[pos] if mode == "marker"
+             else torch.stack([h[s:e].mean(0) for s, e in pos]))
+    return head(feats.float())
 
 
 def marker_layout(ctx, options, mask_id):
@@ -297,6 +361,20 @@ class HFBackbone(nn.Module):
             return out.logits, (hs[-1] if hs else self._hidden(ids))
         return out.logits
 
+    def hidden_layers(self, ids, layer_idx):
+        """(L,B,T,D) hidden states at the given indices (negatives ok).
+        HF hidden_states[0] is the embedding; [-1] is the final norm output."""
+        try:
+            out = self.hf(input_ids=ids, output_hidden_states=True)
+        except TypeError:
+            out = self.hf(input_ids=ids)
+        hs = getattr(out, "hidden_states", None)
+        if not hs:
+            inner = getattr(self.hf, "model", None)
+            o = inner(input_ids=ids, output_hidden_states=True)
+            hs = o.hidden_states
+        return torch.stack([hs[i] for i in layer_idx])
+
     def n_params(self):
         return sum(p.numel() for p in self.parameters())
 
@@ -351,7 +429,14 @@ def load_decision(ckpt_path, config=None, device="cpu"):
         model = load_backbone(ckpt_path, config, device=device)
     head = None
     if head_sd is not None:
-        head = DecisionHead(model.tok_emb.embedding_dim).to(device)
+        meta = raw.get("meta", {}) if isinstance(raw, dict) else {}
+        kind = raw.get("head_kind", meta.get("head_kind", "mlp")) \
+            if isinstance(raw, dict) else "mlp"
+        if kind == "attnpool":
+            head = AttnPoolHead(model.tok_emb.embedding_dim,
+                                n_layers=raw.get("n_layers", 1)).to(device)
+        else:
+            head = DecisionHead(model.tok_emb.embedding_dim).to(device)
         head.load_state_dict(head_sd)
         head.eval()
     return model, head

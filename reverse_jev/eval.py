@@ -104,7 +104,8 @@ def span_logprob(model, ctx, cand, device):
     return lp.gather(-1, tgt.unsqueeze(-1)).mean().item()
 
 
-def _option_logits(model, head, ctx, ok, bad, device, mode="marker"):
+def _option_logits(model, head, ctx, ok, bad, device, mode="marker",
+                   layers=(-1,)):
     """R2 forward per order. Returns [logits_a, logits_b] (2-dim tensors)."""
     from .model import marker_layout, spanpool_layout
     mask_id = model.mask_id
@@ -118,20 +119,17 @@ def _option_logits(model, head, ctx, ok, bad, device, mode="marker"):
         else:
             ids, bounds = spanpool_layout(ctx, opts)
         ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
-        h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
-        if mode == "marker":
-            feats = h[pos]
-        else:
-            feats = torch.stack([h[s:e].mean(0) for s, e in bounds])
-        out.append(head(feats.float()).float())
+        from .model import forward_feats
+        pos = pos if mode == "marker" else bounds
+        out.append(forward_feats(model, head, ids, mode, pos, layers).float())
     return out
 
 
 def _option_probs(model, head, ctx, ok, bad, device, mode="marker",
-                  temperature=1.0):
+                  temperature=1.0, layers=(-1,)):
     """R2: one forward per order. Returns p(gold) for each order and the
     debiased (order-averaged) probability that 'ok' is the correct option."""
-    logits = _option_logits(model, head, ctx, ok, bad, device, mode)
+    logits = _option_logits(model, head, ctx, ok, bad, device, mode, layers)
     p_ok, order_correct = [], []
     for lg, gold in zip(logits, (0, 1)):
         p = torch.softmax(lg / temperature, dim=-1)
@@ -141,7 +139,8 @@ def _option_probs(model, head, ctx, ok, bad, device, mode="marker",
 
 
 def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
-                       max_ctx=None, max_cand=None, seed=7331):
+                       max_ctx=None, max_cand=None, seed=7331,
+                       layers=(-1,)):
     """Fit scalar T minimizing binary NLL over per-order option logits.
 
     Dev data only — never the test battery. Gold index is 0 for order A
@@ -156,7 +155,8 @@ def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
             if len(ctx) < 2 or not ok or not bad:
                 continue
             for lg, gold in zip(
-                    _option_logits(model, head, ctx, ok, bad, device, mode),
+                    _option_logits(model, head, ctx, ok, bad, device, mode,
+                                   layers),
                     (0, 1)):
                 logit_rows.append(lg)
                 golds.append(gold)
@@ -183,9 +183,9 @@ def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
     return float(np.exp((np.log(lo) + np.log(hi)) / 2))
 
 
-def _r2_row_logits(model, head, ctx, opts, device, mode):
+def _r2_row_logits(model, head, ctx, opts, device, mode, layers=(-1,)):
     """One forward -> (K,) head logits for options in given order."""
-    from .model import marker_layout, spanpool_layout
+    from .model import marker_layout, spanpool_layout, forward_feats
     K = len(opts)
     ctx = ctx[:model.seq_len // 2]
     cap = max(1, (model.seq_len - len(ctx) - K) // K)
@@ -193,21 +193,19 @@ def _r2_row_logits(model, head, ctx, opts, device, mode):
     if mode == "marker":
         ids, pos = marker_layout(ctx, opts, model.mask_id)
     else:
-        ids, bounds = spanpool_layout(ctx, opts)
+        ids, pos = spanpool_layout(ctx, opts)
     ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
-    h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
-    feats = (h[pos] if mode == "marker"
-             else torch.stack([h[s:e].mean(0) for s, e in bounds]))
-    return head(feats.float()).float()
+    return forward_feats(model, head, ids, mode, pos, layers).float()
 
 
-def fit_r2_temperature_decisions(model, head, rows, device, mode="spanpool"):
+def fit_r2_temperature_decisions(model, head, rows, device,
+                                 mode="spanpool", layers=(-1,)):
     """Fit scalar T minimizing NLL over K-way decision rows (dev only)."""
     examples = []
     with torch.no_grad():
         for row in rows:
             lg = _r2_row_logits(model, head, row["ctx"], list(row["opts"]),
-                                device, mode)
+                                device, mode, layers)
             examples.append((lg, int(row["gold"])))
     if not examples:
         return 1.0
@@ -233,7 +231,7 @@ def fit_r2_temperature_decisions(model, head, rows, device, mode="spanpool"):
 
 
 def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
-               r2_mode="marker", r2_temp=1.0):
+               r2_mode="marker", r2_temp=1.0, layers=(-1,)):
     """E0/R2: compare readouts on (ctx, ok, bad) id triples.
 
     r1_first : ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (degenerate if
@@ -280,7 +278,7 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
             if head is not None:
                 p_avg, order_correct = _option_probs(
                     model, head, ctx, ok, bad, device, mode=r2_mode,
-                    temperature=r2_temp)
+                    temperature=r2_temp, layers=layers)
                 r2_p.append(p_avg)
                 r2_corr.append(int(p_avg > 0.5))
                 r2_ord_corr.append(order_correct)
@@ -326,7 +324,7 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
 
 
 def eval_decisions_ids(model, head, rows, device, mode="spanpool",
-                       temperature=1.0, seed=7331):
+                       temperature=1.0, seed=7331, layers=(-1,)):
     """K-way labeled decisions {ctx, opts[K], gold}: two orders per row.
 
     Returns acc (debiased mean-p argmax), per-order acc, flip_rate,
@@ -357,11 +355,11 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
                     ids, bounds = spanpool_layout(ctx, ordered)
                 ids = _clamp_oob(
                     torch.tensor(ids, dtype=torch.long, device=device), model)
-                h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
-                feats = (h[pos] if mode == "marker"
-                         else torch.stack([h[s:e].mean(0) for s, e in bounds]))
-                p = torch.softmax(head(feats.float()).float() / temperature,
-                                  dim=-1)
+                from .model import forward_feats
+                pos = pos if mode == "marker" else bounds
+                p = torch.softmax(
+                    forward_feats(model, head, ids, mode, pos,
+                                  layers).float() / temperature, dim=-1)
                 if oi == 0:
                     prob_rows.append(p.tolist())
                     p_gold.append(p[gpos].item())
@@ -578,6 +576,9 @@ def main():
     ap.add_argument("--head", help="trained DecisionHead state (enables r2 eval)")
     ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
                     default="marker")
+    ap.add_argument("--r2-layers", default="-1",
+                    help="hidden-layer indices for attnpool heads "
+                         "(comma list, negatives ok)")
     ap.add_argument("--r2-temp", type=float, default=1.0,
                     help="fixed temperature for r2 softmax")
     ap.add_argument("--r2-temp-fit", default=None,
@@ -633,13 +634,14 @@ def main():
         else:
             model, head = load_decision(args.ckpt, cfg, device=args.device)
 
+        layers = [int(x) for x in args.r2_layers.split(",")]
         r2_temp = args.r2_temp
         if head is not None and args.r2_temp_fit:
             from .data import load_pairs_dir
             dev_pairs = [p for ps in load_pairs_dir(args.r2_temp_fit).values()
                          for p in ps]
             r2_temp = fit_r2_temperature(model, head, dev_pairs, args.device,
-                                         mode=args.r2_mode)
+                                         mode=args.r2_mode, layers=layers)
             report["r2_temp_fitted"] = round(r2_temp, 4)
             print(f"[temp] fitted T={r2_temp:.3f} on "
                   f"{len(dev_pairs)} dev pairs", file=sys.stderr)
@@ -647,7 +649,8 @@ def main():
             from .data import load_decisions_ids
             dev_rows = load_decisions_ids(args.r2_temp_fit_decisions)
             r2_temp = fit_r2_temperature_decisions(
-                model, head, dev_rows, args.device, mode=args.r2_mode)
+                model, head, dev_rows, args.device, mode=args.r2_mode,
+                layers=layers)
             report["r2_temp_fitted"] = round(r2_temp, 4)
             print(f"[temp] fitted T={r2_temp:.3f} on "
                   f"{len(dev_rows)} dev decisions", file=sys.stderr)
@@ -660,14 +663,14 @@ def main():
                     levels[lvl] = eval_pairs(model, pairs, args.device,
                                              args.mask_p, args.seed, head=head,
                                              r2_mode=args.r2_mode,
-                                             r2_temp=r2_temp)
+                                             r2_temp=r2_temp, layers=layers)
                     print(json.dumps({"level": lvl, **levels[lvl]}))
                 report["battery"] = levels
             else:
                 pairs = load_pairs(args.pairs)
                 out = eval_pairs(model, pairs, args.device, args.mask_p,
                                  args.seed, head=head, r2_mode=args.r2_mode,
-                                 r2_temp=r2_temp)
+                                 r2_temp=r2_temp, layers=layers)
                 report["pairs_eval"] = out
                 print(json.dumps(out, indent=2))
 
@@ -679,7 +682,7 @@ def main():
             rows = load_decisions_ids(args.decisions_eval)
             out = eval_decisions_ids(model, head, rows, args.device,
                                      mode=args.r2_mode, temperature=r2_temp,
-                                     seed=args.seed)
+                                     seed=args.seed, layers=layers)
             report["decisions_eval"] = {
                 "file": args.decisions_eval, **out}
             print(json.dumps(out, indent=2))

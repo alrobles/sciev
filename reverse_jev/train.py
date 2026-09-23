@@ -23,7 +23,8 @@ import torch
 import torch.nn.functional as F
 
 from .data import iter_decisions
-from .model import load_backbone, MdLMMoE, DEFAULT_CONFIG
+from .model import (load_backbone, MdLMMoE, DEFAULT_CONFIG,
+                    forward_feats)
 from .readout import option_id_sets, noul_id_sets, build_sequence
 
 
@@ -121,20 +122,23 @@ def train_r2(model, head, examples, args, device):
         else:
             ctx, opts, gold = ex
             soft = None
-        ids, pos, gold, perm = _r2_example(
-            model, ctx, opts, gold, rng, device, mode=args.r2_mode)
-        h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
-        if args.r2_mode == "marker":
-            feats = h[pos]
-        else:
-            feats = torch.stack([h[s:e].mean(0) for s, e in pos])
-        logits = head(feats.float())
+        # --orders N: average logits over N option orders (canonical space)
+        lg_orders = []
+        for _ in range(args.orders):
+            ids, pos, gold_p, perm = _r2_example(
+                model, ctx, opts, gold, rng, device, mode=args.r2_mode)
+            lg = forward_feats(model, head, ids, args.r2_mode, pos,
+                               layers=args.layers_list)
+            lg_c = torch.empty_like(lg)
+            lg_c[perm] = lg          # map back to canonical option order
+            lg_orders.append(lg_c)
+        logits = torch.stack(lg_orders).mean(0)
         loss = F.cross_entropy(logits.unsqueeze(0),
                                torch.tensor([gold], device=device))
         if soft is not None and args.soft_weight > 0:
-            # distillation: KL(student_T || teacher_T) on the permuted order
+            # distillation: KL(student_T || teacher_T), canonical order
             T = args.soft_temp
-            t = torch.tensor([soft[j] for j in perm], dtype=torch.float,
+            t = torch.tensor(soft, dtype=torch.float,
                              device=device).clamp_min(1e-9)
             t = t / t.sum()
             kl = F.kl_div(F.log_softmax(logits / T, dim=-1),
@@ -182,6 +186,15 @@ def main():
                     help="R2: freeze backbone, train DecisionHead only")
     ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
                     default="marker")
+    ap.add_argument("--head-kind", choices=["mlp", "attnpool"], default="mlp",
+                    help="attnpool: attention pooling over option tokens + "
+                         "multi-layer features (spanpool mode only)")
+    ap.add_argument("--r2-layers", default="-1",
+                    help="comma list of hidden-layer indices for attnpool "
+                         "(negatives ok, e.g. '-1,-9,-17,-25')")
+    ap.add_argument("--orders", type=int, default=1,
+                    help="option orders averaged per training example "
+                         "(order-robustness; >1 slows each step)")
     ap.add_argument("--head-lr", type=float, default=1e-3)
     ap.add_argument("--dev", default=None, help="held-out for temperature fit")
     ap.add_argument("--ckpt", default=None, help="init backbone from checkpoint")
@@ -216,7 +229,8 @@ def main():
     # ---------- R2 path: option head on id-examples, no tokenizer ----------
     if args.pairs_train or args.decisions_train:
         from .data import load_pairs_dir, load_decisions_ids
-        from .model import DecisionHead, HFBackbone
+        from .model import (DecisionHead, AttnPoolHead, HFBackbone,
+                            forward_feats)
         cfg = None
         if args.config:
             import yaml
@@ -226,7 +240,15 @@ def main():
             model = HFBackbone(args.hf_backbone, device=args.device)
         else:
             model = load_backbone(args.ckpt, cfg, device=args.device)
-        head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)
+        args.layers_list = [int(x) for x in args.r2_layers.split(",")]
+        if args.head_kind == "attnpool":
+            if args.r2_mode != "spanpool":
+                ap.error("--head-kind attnpool requires --r2-mode spanpool")
+            head = AttnPoolHead(model.tok_emb.embedding_dim,
+                                n_layers=len(args.layers_list)
+                                ).to(args.device)
+        else:
+            head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)
         examples = []
         if args.pairs_train:
             want = set(args.levels.split(","))
@@ -250,6 +272,8 @@ def main():
               f"(mode={args.r2_mode}, freeze={args.freeze})")
         model, head = train_r2(model, head, examples, args, args.device)
         ckpt = {"head": head.state_dict(),
+                "head_kind": args.head_kind,
+                "n_layers": len(args.layers_list),
                 "meta": {"mode": f"r2_{args.r2_mode}",
                          "pairs_train": args.pairs_train,
                          "decisions_train": args.decisions_train}}
