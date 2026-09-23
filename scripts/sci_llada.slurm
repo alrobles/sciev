@@ -11,18 +11,21 @@
 # The capacity test: LLaDA-8B-Instruct (pretrained dLLM, Apache-2.0) as
 # backbone via HFBackbone — freeze (head only) + full-FT spanpool on the
 # scientific decision battery.
+#
+# Env: bioai venv (torch 2.14 cu130) + PYTHONPATH tf446 pin — LLaDA remote
+# code requires transformers 4.x (5.x renames _tied_weights_keys internals).
 
 set -euo pipefail
 RJ=/beegfs/a474r867/reverse-jev
 ECO=/beegfs/a474r867/ecoreasoner
 BAT=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
-SIF=$ECO/pytorch-cuda.sif
-OVL=$ECO/blackwell-torch.overlay
-PY=/bb/bwvenv/bin/python
+PY=/beegfs/a474r867/bioai/venv/bin/python
 LLADA=GSAI-ML/LLaDA-8B-Instruct
 mkdir -p "$RUNS"
 export HF_HOME=/beegfs/a474r867/hf-cache
+export PYTHONNOUSERSITE=1
+export PYTHONPATH=/beegfs/a474r867/pylibs/tf446:$RJ
 cd "$RJ"
 
 cat "$BAT"/sci_choice_train.jsonl \
@@ -32,10 +35,8 @@ cat "$BAT"/sci_choice_dev.jsonl \
     "$BAT"/sci_noul_dev.jsonl \
     "$BAT"/sci_score_dev.jsonl > "$BAT"/sci_all_dev.jsonl
 
-run() { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
-
 echo "=== TRAIN sci spanpool FREEZE (LLaDA-8B, head only) ==="
-run -m reverse_jev.train \
+$PY -m reverse_jev.train \
     --decisions-train "$BAT/sci_all_train.jsonl" \
     --hf-backbone "$LLADA" \
     --r2-mode spanpool --steps 6000 --accum 1 --freeze \
@@ -43,7 +44,7 @@ run -m reverse_jev.train \
     --out "$RUNS/sci_llada_freeze"
 
 echo "=== TRAIN sci spanpool FT (LLaDA-8B) ==="
-run -m reverse_jev.train \
+$PY -m reverse_jev.train \
     --decisions-train "$BAT/sci_all_train.jsonl" \
     --hf-backbone "$LLADA" \
     --r2-mode spanpool --steps 4000 --accum 1 \
@@ -53,7 +54,7 @@ run -m reverse_jev.train \
 for TAG in sci_llada_freeze sci_llada_ft; do
     for KIND in choice noul score; do
         echo "=== EVAL $KIND ($TAG) ==="
-        run -m reverse_jev.eval \
+        $PY -m reverse_jev.eval \
             --ckpt "$RUNS/$TAG/decision.pt" \
             --r2-mode spanpool \
             --r2-temp-fit-decisions "$BAT/sci_all_dev.jsonl" \
