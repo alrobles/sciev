@@ -12,6 +12,7 @@
 #   mlp_o4 : DecisionHead + --orders 4        (order-robustness alone)
 #   ap_o1  : AttnPoolHead L{8,16,24,32} + o1  (readout upgrade alone)
 #   ap_o4  : AttnPoolHead + --orders 4        (both)
+# NB: --r2-layers uses =form (values starting with - are parsed as flags).
 
 set -euo pipefail
 RJ=/beegfs/a474r867/reverse-jev
@@ -34,11 +35,12 @@ cat "$BAT"/sci_choice_dev.jsonl \
     "$BAT"/sci_score_dev.jsonl > "$BAT"/sci_all_dev.jsonl
 
 train() {  # tag head_kind layers orders steps
+    [ -f "$RUNS/$1/decision.pt" ] && { echo "=== SKIP $1 (done) ==="; return; }
     echo "=== TRAIN $1 ==="
     $PY -m reverse_jev.train \
         --decisions-train "$BAT/sci_all_train.jsonl" \
         --hf-backbone "$LLADA" \
-        --r2-mode spanpool --head-kind "$2" --r2-layers "$3" \
+        --r2-mode spanpool --head-kind "$2" --r2-layers="$3" \
         --orders "$4" --steps "$5" --accum 1 --freeze \
         --head-lr 3e-4 --warmup 200 --device cuda \
         --out "$RUNS/$1"
@@ -53,7 +55,7 @@ for TAG in mlp_o4 ap_o1 ap_o4; do
         echo "=== EVAL $KIND ($TAG) ==="
         $PY -m reverse_jev.eval \
             --ckpt "$RUNS/$TAG/decision.pt" \
-            --r2-mode spanpool --r2-layers "$LAYERS" \
+            --r2-mode spanpool --r2-layers="$LAYERS" \
             --r2-temp-fit-decisions "$BAT/sci_all_dev.jsonl" \
             --decisions-eval "$BAT/sci_${KIND}_eval.jsonl" \
             --device cuda --out "$RUNS/eval_${TAG}_${KIND}.json"
