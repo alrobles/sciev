@@ -21,8 +21,13 @@ Distractor/negative strategies:
   - cross-passage: answer to a question on a different pid (easy negative)
 
 Record format (model path): {"ctx":[ids], "opts":[[ids]...], "gold":i, "qid":str}
+
+v2 sources: --qa-raw GLOB accepts qa_raw_shard*.jsonl
+{"pid","passage","qa":[{q,a}]} (ecoreasoner qa_gen output). Light
+groundedness filters from qa_filter.py keep bad teacher generations out.
 """
 import argparse
+import glob
 import json
 import random
 import re
@@ -34,6 +39,11 @@ SCORE_LEGEND = ["unrelated answer", "related but wrong answer",
                 "correct answer"]
 
 NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_WORD = re.compile(r"[a-záéíóúñü][a-záéíóúñü\-']*", re.I)
+_STOP = set("""a an the of in on at to for and or but is are was were be been
+it its this that these those with by from as we i you they he she not no do
+does did have has had can could will would should may might than then so such
+""".split())
 MAX_CTX = 640          # leave headroom for opts inside seq_len=768
 MAX_OPT = 120
 
@@ -41,6 +51,49 @@ MAX_OPT = 120
 def load_rows(path):
     return [json.loads(l) for l in Path(path).read_text().splitlines()
             if l.strip()]
+
+
+def _content_words(text):
+    return [w.lower() for w in _WORD.findall(text)
+            if len(w) > 3 and w.lower() not in _STOP]
+
+
+def _norm_num(s):
+    return s.replace(",", "").rstrip("0.")
+
+
+def grounded(q, a, passage):
+    """qa_filter-style gates: schema, answer recall >=0.5, number binding."""
+    if not q or not a or len(q) > 400 or not (8 <= len(a) <= 512):
+        return False
+    pset = set(_content_words(passage))
+    aw = _content_words(a)
+    if aw and sum(1 for w in aw if w in pset) / len(aw) < 0.5:
+        return False
+    pnums = {_norm_num(n) for n in re.findall(r"\d[\d.,]*", passage)}
+    return all(_norm_num(n) in pnums
+               for n in re.findall(r"\d[\d.,]*", a))
+
+
+def load_qa_raw(pattern, rng, qas_per_pid=2, min_recall=True):
+    """qa_raw_shard*.jsonl -> flat recs {pid, passage, q, a}, filtered."""
+    recs = []
+    for fp in sorted(glob.glob(pattern)):
+        for line in open(fp, encoding="utf-8"):
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            pas = r.get("passage", "").strip()
+            if not pas:
+                continue
+            qas = [qa for qa in r.get("qa", [])
+                   if grounded(qa.get("q", "").strip(),
+                               qa.get("a", "").strip(), pas)]
+            rng.shuffle(qas)
+            for qa in qas[:qas_per_pid]:
+                recs.append({"pid": r["pid"], "passage": pas,
+                             "q": qa["q"].strip(), "a": qa["a"].strip()})
+    return recs
 
 
 def perturb_number(ans, rng):
@@ -141,7 +194,16 @@ def build(recs, by_pid, all_answers, tok, rng, tag):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--qa", required=True, help="qa_devin_elite.jsonl")
+    ap.add_argument("--qa", default=None, help="qa_devin_elite.jsonl")
+    ap.add_argument("--qa-raw", action="append", default=[],
+                    help="glob of qa_raw_shard*.jsonl {pid,passage,qa}; "
+                         "repeatable. Alternative to --qa")
+    ap.add_argument("--qas-per-pid", type=int, default=2,
+                    help="max QAs kept per passage (qa-raw mode)")
+    ap.add_argument("--train-pids", type=int, default=None,
+                    help="explicit train split size in pids (else fractions)")
+    ap.add_argument("--dev-pids", type=int, default=None)
+    ap.add_argument("--eval-pids", type=int, default=None)
     ap.add_argument("--out", required=True)
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--seed", type=int, default=7331)
@@ -153,7 +215,16 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    rows = load_rows(args.qa)
+    if args.qa_raw:
+        rows = []
+        for pat in args.qa_raw:
+            rs = load_qa_raw(pat, rng, qas_per_pid=args.qas_per_pid)
+            print(f"[load] {pat}: {len(rs)} recs")
+            rows += rs
+    elif args.qa:
+        rows = load_rows(args.qa)
+    else:
+        ap.error("--qa or --qa-raw required")
     by_pid = {}
     for r in rows:
         by_pid.setdefault(r["pid"], []).append(r)
@@ -161,14 +232,24 @@ def main():
 
     pids = sorted(by_pid, key=str)
     rng.shuffle(pids)
-    n_eval = int(len(pids) * args.eval_frac)
-    n_dev = int(len(pids) * args.dev_frac)
-    pid_eval, pid_dev = set(pids[:n_eval]), set(pids[n_eval:n_eval + n_dev])
+    if args.train_pids is not None:
+        n_eval = args.eval_pids or 0
+        n_dev = args.dev_pids or 0
+        n_train = args.train_pids
+    else:
+        n_eval = int(len(pids) * args.eval_frac)
+        n_dev = int(len(pids) * args.dev_frac)
+        n_train = len(pids) - n_eval - n_dev
+    pid_eval = set(pids[:n_eval])
+    pid_dev = set(pids[n_eval:n_eval + n_dev])
+    pid_train = set(pids[n_eval + n_dev:n_eval + n_dev + n_train])
     splits = {"eval": [], "dev": [], "train": []}
     for r in rows:
         tag = ("eval" if r["pid"] in pid_eval
-               else "dev" if r["pid"] in pid_dev else "train")
-        splits[tag].append(r)
+               else "dev" if r["pid"] in pid_dev
+               else "train" if r["pid"] in pid_train else None)
+        if tag:
+            splits[tag].append(r)
 
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
