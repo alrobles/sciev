@@ -124,7 +124,8 @@ def test_r2_kway_decisions():
                          "qid": f"t{i}",
                          "soft": [0.7, 0.1, 0.1, 0.1]})
     args = SimpleNamespace(seed=0, freeze=False, head_lr=1e-3, lr=1e-3,
-                           orders=1, layers_list=(-1,),
+                           orders=1, layers_list=(-1,), canonical_order=False,
+                           ordinal=0.0,
                            steps=80, r2_mode="spanpool", rl=0.0,
                            rl_samples=4, rl_noise=0.1, accum=1, warmup=10,
                            soft_weight=0.5, soft_temp=2.0)

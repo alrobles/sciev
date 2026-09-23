@@ -68,11 +68,22 @@ def _reward(probs, gold):
 
 # ---------------- R2: marker-head training on (ctx, ok, bad) id-pairs --------
 
-def _r2_example(model, ctx, opts, gold, rng, device, mode="marker"):
-    """Build one R2 training example with a random option permutation.
+def _canonical_perm(opts):
+    """Deterministic option order: sort by token-id content.
+
+    Makes the presented order a pure function of the option *set*, so any
+    input permutation collapses to the same sequence (flip_rate = 0 by
+    construction at eval)."""
+    return sorted(range(len(opts)), key=lambda j: tuple(opts[j]))
+
+
+def _r2_example(model, ctx, opts, gold, rng, device, mode="marker",
+                canonical=False):
+    """Build one R2 training example with an option permutation.
 
     marker   : ctx + [M] opt_1 + ... + [M] opt_K -> head reads h[marker]
     spanpool : ctx + opt_1 + ... + opt_K         -> head reads mean h[span]
+    canonical: deterministic content-sorted order instead of random
     """
     from .model import marker_layout, spanpool_layout
     K = len(opts)
@@ -80,8 +91,8 @@ def _r2_example(model, ctx, opts, gold, rng, device, mode="marker"):
     ctx = ctx[:max_ctx]
     cap = max(1, (model.seq_len - len(ctx) - K) // K)
     opts = [o[:cap] for o in opts]
-    perm = list(range(K))
-    rng.shuffle(perm)
+    perm = _canonical_perm(opts) if canonical else \
+        rng.sample(range(K), K)
     opts = [opts[j] for j in perm]
     gold = perm.index(gold)
     if mode == "marker":
@@ -122,11 +133,14 @@ def train_r2(model, head, examples, args, device):
         else:
             ctx, opts, gold = ex
             soft = None
-        # --orders N: average logits over N option orders (canonical space)
+        # --orders N: average logits over N option orders (canonical space).
+        # canonical order makes all N draws identical -> single forward.
+        n_orders = 1 if args.canonical_order else args.orders
         lg_orders = []
-        for _ in range(args.orders):
+        for _ in range(n_orders):
             ids, pos, gold_p, perm = _r2_example(
-                model, ctx, opts, gold, rng, device, mode=args.r2_mode)
+                model, ctx, opts, gold, rng, device, mode=args.r2_mode,
+                canonical=args.canonical_order)
             lg = forward_feats(model, head, ids, args.r2_mode, pos,
                                layers=args.layers_list)
             lg_c = torch.empty_like(lg)
@@ -144,6 +158,17 @@ def train_r2(model, head, examples, args, device):
             kl = F.kl_div(F.log_softmax(logits / T, dim=-1),
                           t, reduction="batchmean") * T * T
             loss = (1 - args.soft_weight) * loss + args.soft_weight * kl
+        if args.ordinal > 0 and logits.numel() > 2:
+            # ordinal auxiliary loss (score levels are ordered 0<1<2):
+            # BCE(P(y >= j), 1{gold >= j}) on cumulative softmax probs
+            K_ = logits.numel()
+            probs = torch.softmax(logits, dim=-1)
+            p_ge = 1.0 - probs.cumsum(-1)[:-1]     # P(y >= j+1)
+            tgt = torch.tensor(
+                [float(gold >= j + 1) for j in range(K_ - 1)],
+                device=device)
+            loss = loss + args.ordinal * F.binary_cross_entropy(
+                p_ge.clamp(1e-7, 1 - 1e-7), tgt)
         if args.rl > 0:
             # RCDL-lite: REINFORCE over Gaussian-perturbed distributions,
             # reward = proper scoring rule (log + 0.75*spherical)
@@ -195,6 +220,12 @@ def main():
     ap.add_argument("--orders", type=int, default=1,
                     help="option orders averaged per training example "
                          "(order-robustness; >1 slows each step)")
+    ap.add_argument("--canonical-order", action="store_true",
+                    help="present options in deterministic content-sorted "
+                         "order; flip_rate = 0 by construction")
+    ap.add_argument("--ordinal", type=float, default=0.0,
+                    help="weight of ordinal cumulative-BCE auxiliary loss "
+                         "(ordered K-way decisions like score levels)")
     ap.add_argument("--head-lr", type=float, default=1e-3)
     ap.add_argument("--dev", default=None, help="held-out for temperature fit")
     ap.add_argument("--ckpt", default=None, help="init backbone from checkpoint")

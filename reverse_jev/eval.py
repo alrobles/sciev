@@ -199,14 +199,22 @@ def _r2_row_logits(model, head, ctx, opts, device, mode, layers=(-1,)):
 
 
 def fit_r2_temperature_decisions(model, head, rows, device,
-                                 mode="spanpool", layers=(-1,)):
+                                 mode="spanpool", layers=(-1,),
+                                 canonical=False):
     """Fit scalar T minimizing NLL over K-way decision rows (dev only)."""
     examples = []
     with torch.no_grad():
         for row in rows:
-            lg = _r2_row_logits(model, head, row["ctx"], list(row["opts"]),
+            opts = list(row["opts"])
+            gold = int(row["gold"])
+            if canonical:
+                cperm = sorted(range(len(opts)),
+                               key=lambda j: tuple(opts[j]))
+                gold = cperm.index(gold)
+                opts = [opts[j] for j in cperm]
+            lg = _r2_row_logits(model, head, row["ctx"], opts,
                                 device, mode, layers)
-            examples.append((lg, int(row["gold"])))
+            examples.append((lg, gold))
     if not examples:
         return 1.0
 
@@ -324,8 +332,13 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
 
 
 def eval_decisions_ids(model, head, rows, device, mode="spanpool",
-                       temperature=1.0, seed=7331, layers=(-1,)):
+                       temperature=1.0, seed=7331, layers=(-1,),
+                       canonical=False):
     """K-way labeled decisions {ctx, opts[K], gold}: two orders per row.
+
+    canonical=True sorts each presented option list deterministically by
+    content, so both eval orders collapse to the same sequence
+    (flip_rate -> 0 by construction).
 
     Returns acc (debiased mean-p argmax), per-order acc, flip_rate,
     mean p_gold, brier (K-dim), nll, ece, automation, calib_curve.
@@ -348,7 +361,13 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
             orders.append(perm)
             for oi, order in enumerate(orders):
                 ordered = [opts[j] for j in order]
-                gpos = order.index(gold)
+                gidx = order.index(gold)
+                if canonical:
+                    cperm = sorted(range(K), key=lambda j: tuple(ordered[j]))
+                    ordered = [ordered[j] for j in cperm]
+                    gpos = cperm.index(gidx)
+                else:
+                    gpos = gidx
                 if mode == "marker":
                     ids, pos = marker_layout(ctx, ordered, mask_id)
                 else:
@@ -581,6 +600,9 @@ def main():
                          "(comma list, negatives ok)")
     ap.add_argument("--r2-temp", type=float, default=1.0,
                     help="fixed temperature for r2 softmax")
+    ap.add_argument("--canonical-order", action="store_true",
+                    help="sort options deterministically by content before "
+                         "layout (must match training)")
     ap.add_argument("--r2-temp-fit", default=None,
                     help="dev pairs dir: fit T on it, then evaluate test")
     ap.add_argument("--r2-temp-fit-decisions", default=None,
@@ -650,7 +672,7 @@ def main():
             dev_rows = load_decisions_ids(args.r2_temp_fit_decisions)
             r2_temp = fit_r2_temperature_decisions(
                 model, head, dev_rows, args.device, mode=args.r2_mode,
-                layers=layers)
+                layers=layers, canonical=args.canonical_order)
             report["r2_temp_fitted"] = round(r2_temp, 4)
             print(f"[temp] fitted T={r2_temp:.3f} on "
                   f"{len(dev_rows)} dev decisions", file=sys.stderr)
@@ -682,7 +704,8 @@ def main():
             rows = load_decisions_ids(args.decisions_eval)
             out = eval_decisions_ids(model, head, rows, args.device,
                                      mode=args.r2_mode, temperature=r2_temp,
-                                     seed=args.seed, layers=layers)
+                                     seed=args.seed, layers=layers,
+                                     canonical=args.canonical_order)
             report["decisions_eval"] = {
                 "file": args.decisions_eval, **out}
             print(json.dumps(out, indent=2))
