@@ -360,7 +360,8 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
                 h = model(ids.unsqueeze(0), skip_head=True).squeeze(0)
                 feats = (h[pos] if mode == "marker"
                          else torch.stack([h[s:e].mean(0) for s, e in bounds]))
-                p = torch.softmax(head(feats).float() / temperature, dim=-1)
+                p = torch.softmax(head(feats.float()).float() / temperature,
+                                  dim=-1)
                 if oi == 0:
                     prob_rows.append(p.tolist())
                     p_gold.append(p[gpos].item())
