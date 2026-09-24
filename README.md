@@ -1,267 +1,111 @@
 # reverse-jev
 
-Open [System One](https://docs.typesafe.ai/concepts/system-one)-style decision
-models on the EcoReasoner dLLM backbone. Typed questions (`noul` / `choice` /
-`score`) over a `state`, answered with calibrated probabilities in **one
-forward pass** — no text generation, nothing to parse, nothing to hallucinate.
+Open **System-One-style decision models** on a frozen masked-diffusion
+backbone. Typed questions (`choice` / `noul` / `score`) over a `state`,
+answered with calibrated probabilities in **one forward pass** — no text
+generation, nothing to parse, nothing to hallucinate.
 
-A deconstruction-and-rebuild of TypeSafe AI's **Jev** (released 2026-09-15,
-API-only), in the spirit of [Laya](https://huggingface.co/convaiinnovations/laya)
-and [Kev](https://github.com/jaredpalmer/kev), but on our own masked-diffusion
-backbone (`MdLMMoE`, vendored from
-[alrobles/ecoreasoner](https://github.com/alrobles/ecoreasoner)) and aimed at
-scientific/ecological decisions. Design rationale:
-`docs/designs/ecoreasoner-Fase4-SYSTEMONE-DESIGN.md` in ecoreasoner.
+General-purpose by design, with a scientific specialty: the heads are
+trained on passage-grounded scientific decisions and transfer zero-shot
+to general classification.
 
-## Status
+The only open entry in the System-One ecosystem
+([kev](https://github.com/jaredpalmer/kev),
+[openjev](https://huggingface.co/openjev/openjev),
+[laya](https://huggingface.co/convaiinnovations/laya),
+[SemIf](https://github.com/), djev-spark) built on a **masked-diffusion
+language model** (LLaDA-8B) instead of an autoregressive one — and the
+only one with **exact option-order invariance**: options are canonically
+sorted by content, so the flip rate is `0.00` by construction rather
+than ~0.03–0.08 empirically.
 
-Early scaffold. The backbone checkpoints live on KU HPC
-(`/beegfs/a474r867/ecoreasoner/runs/`); everything here runs CPU-friendly for
-development.
+## Results (v0.1 candidate, `c_*` heads on frozen LLaDA-8B)
 
-## The readout (R1, zero extra params)
+| benchmark | type | acc | ECE | auto@5%err | reference |
+|---|---|---:|---:|---:|---|
+| sci battery (elite) | choice | **0.870** | 0.025 | **0.807** | — |
+| sci battery (elite) | noul | **0.783** | 0.096 | 0.278 | — |
+| sci battery (elite) | score | **0.608** | 0.122 | 0.433 | — |
+| SciFact dev | noul | **0.853** | 0.103 | 0.271 | ~0.89 |
+| SciFact dev | score | 0.624 | 0.088 | 0.250 | ~0.70 |
+| GPQA main / diamond | choice | 0.315 / 0.328 | 0.32 | 0.01 | backbone ceiling ~0.33 |
+| SST-2 (zero-shot) | choice | **0.930** | 0.068 | **0.944** | 0.957 |
+| AG News (zero-shot) | choice | **0.854** | 0.055 | 0.359 | 0.913 |
+| Enron spam (zero-shot) | choice | 0.752 | 0.105 | 0.000 | 0.987 |
+| Banking77 (K=77) | choice | 0.229 | 0.076 | 0.016 | 0.760 |
+
+`auto@5%err` = share of decisions auto-acceptable while keeping realized
+error ≤ 5% — the operating metric of a decision layer. Option-order flip
+rate is `0.00` on every benchmark (canonical ordering).
+
+Known limits: K>4 options (Banking77), parametric knowledge bounded by
+the backbone (GPQA ≈ LLaDA ceiling), `score` is the weakest type for
+every system measured.
+
+## Architecture
 
 ```
-state + question + [MASK]  ->  logits[MASK] sliced to each option's
-                               first-token id set  ->  softmax  ->  P(option)
+ctx + question + options (canonically sorted by token-ids)
+  -> frozen LLaDA-8B (bidirectional masked-diffusion LM)
+  -> hidden states, layers {8,16,24,32}
+  -> specialist head per decision type (~2M params)
+       choice: AttnPoolHead — learned query pools each option's tokens
+       noul:   MLP over mean-pooled span
+       score:  MLP + CORAL-style ordinal auxiliary loss (P(y>=j))
+  -> per-option logits -> softmax (temperature fitted on dev)
 ```
 
-A single mask slot after the prompt; each option maps to its candidate
-first-token ids (casing/space variants). `noul` slices over {yes,true,si}
-vs {no,false}; `choice` over option names; `score` over level-index tokens.
-Confidence is a statistic of the distribution: `(p_max − 1/K)/(1 − 1/K)`.
-Temperature scales logits post-hoc (fitted on held-out dev data only).
+Heads are ~8 MB; the backbone stays frozen and is fetched from HF.
+Only the heads ship with the release.
 
-R2: two trained head variants over backbone hidden states — `marker`
-(Laya-style, reads h at `[MASK]` slots before each option) and
-`spanpool` (reads mean h over each observed option span). Train with
-`reverse_jev.train --pairs-train`; evaluate with `eval --head/--r2-mode`.
-
-## E0 — the no-training experiment
-
-Does a dedicated decision readout discriminate better than the Fase-3
-denoise-loss scorer on the same pairs? Three readouts compared:
-
-- `r1_first_token`: `ctx + [MASK]`, compare logits of each candidate's
-  first token. Diagnostic only — on these batteries `first_token_differs`
-  is 0 (pairs diverge deeper in the span), so this is degenerate.
-- `r1_span`: `ctx + [MASK]*len(cand)`, mean logprob of true candidate
-  tokens at masked positions — the dLLM-native option scorer.
-- `legacy_denoise`: random-mask denoise CE over `ctx + cand` (Fase-3).
+## Quickstart
 
 ```bash
+pip install -e .
 python -m reverse_jev.eval \
-    --ckpt /beegfs/a474r867/ecoreasoner/runs/f0-span-esqueleto/checkpoint-g10000/model.pt \
-    --config harness/configs/f0-span-esqueleto.yaml \
-    --pairs /beegfs/a474r867/ecoreasoner/runs/pairs_hard_v3/pairs_L3.jsonl
+    --ckpt runs/sci/c_choice/decision.pt \
+    --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
+    --decisions-eval data/bench_external/gpqa/gpqa_main_choice_eval.jsonl \
+    --device cuda --out eval.json
 ```
 
-### E0 result — pairwise_acc, `r1_span` vs `legacy_denoise`
+Decision records are `{ctx: [token-ids], opts: [[token-ids]...], gold}`.
+Converters for GPQA / SciFact / SST-2 / AG News / Enron / Banking77 live
+in `data/convert_benchmarks.py`; the scientific battery builder is
+`data/build_sci_decisions.py`.
 
-pairs_hard_v3_eval (n≈500/level) / pairs_hard_v4_holdout_clean (n≈1900/level):
+## Domain adaptation (DAPT)
 
-| ckpt | lvl | v3 legacy | v3 span | v4 legacy | v4 span |
-|---|---|---|---|---|---|
-| f0-span-esqueleto | L0 | 0.540 | **0.600** | 0.555 | **0.606** |
-| | L1 | 0.537 | **0.593** | 0.530 | **0.564** |
-| | L2 | 0.611 | 0.613 | 0.573 | **0.612** |
-| | **L3** | 0.518 | **0.579** | 0.527 | **0.571** |
-| f0-span-v2-weight-tying | L0 | 0.511 | 0.544 | 0.526 | 0.521 |
-| | L1 | 0.506 | 0.522 | 0.512 | **0.543** |
-| | L2 | 0.617 | **0.639** | 0.613 | **0.657** |
-| | **L3** | 0.516 | **0.568** | 0.511 | **0.577** |
-| f0-span-esqueleto-v2-piloto | L0 | 0.501 | 0.535 | 0.524 | 0.525 |
-| | L1 | 0.514 | 0.526 | 0.509 | **0.539** |
-| | L2 | 0.604 | **0.617** | 0.593 | **0.632** |
-| | **L3** | 0.524 | **0.554** | 0.511 | **0.564** |
-| f2-spanes-50k | L0 | 0.568 | **0.716** | 0.572 | **0.741** |
-| | L1 | 0.555 | **0.658** | 0.553 | **0.664** |
-| | L2 | 0.611 | 0.525 | 0.586 | 0.524 |
-| | **L3** | 0.512 | **0.575** | 0.522 | **0.560** |
-
-**The readout was the bottleneck.** All four checkpoints — L3 ≈ 0.51–0.53
-(chance) under denoise-loss, the result that falsified the inferential
-thesis at the 0.55 gate — land at L3 ≈ 0.56–0.58 on both batteries when
-the candidate span is scored under a full mask (~4σ over chance at
-n=1767). f2-spanes-50k additionally reveals strong shallow-discourse
-signal (L0 0.74, L1 0.66 holdout) that denoise-loss hid; its L2
-inversion suggests stage-grammar and option-content trade off under
-different readouts — worth its own probe.
-
-Caveats: pairwise discrimination ≠ calibration (RLCD/temperature come
-later); `r1_span` is mean logprob — length-normalized, not a true joint;
-the same tokenizer/model pair must score both candidates.
-
-## R2 — trained decision head (pairs_hard_v3 train, ~2k pairs, 6–8k steps)
-
-Head `DecisionHead` over backbone hidden states; CE over the 2-option
-softmax, order randomized per step. Both option orders evaluated per
-pair (order-debiased acc + flip_rate = option-order sensitivity).
-
-### marker mode (`[M]` before each option)
-
-| ckpt | lvl | v3_eval | v4_holdout |
-|---|---|---|---|
-| esqueleto (freeze/ft) | all | ~0.50 | ~0.50 — head collapses to position noise (flip ~0.8) |
-| f2-spanes-50k freeze | L2 | **0.730** | **0.751** |
-| f2-spanes-50k ft | L2 | **0.777** | — |
-| f2-spanes-50k ft | L3 | 0.516 | — |
-
-The 10k-step backbone carries nothing readable at mask slots; the 50k
-span-infilling backbone encodes stage grammar linearly at `[MASK]`
-positions. Marker mode wins L2 outright.
-
-### spanpool mode (mean h over each option's tokens)
-
-| ckpt | lvl | v3_eval | v4_holdout |
-|---|---|---|---|
-| esq freeze | L0–L3 | 0.56–0.61 | 0.50–0.62 |
-| f2 freeze | L2 | 0.692 | 0.676 |
-| **f2 ft** | L0 | **0.757** | **0.729** |
-| | L1 | **0.669** | **0.670** |
-| | L2 | 0.712 | **0.706** |
-| | L3 | 0.579 | 0.542 |
-| | flip_rate | 0.29–0.43 | 0.35–0.43 (L3 ~0.89) |
-| | brier | 0.175–0.24 | automation@5%: L0 0.22, L2 0.22 |
-
-**f2-spanes-50k + spanpool + light FT is the best decision model so
-far**: beats every zero-shot readout on every level except marker-ft on
-L2. L3 holds ~0.54–0.58 across all readouts — the inferential ceiling
-of this backbone; stable under debiased ordering but flip_rate ~0.89
-means individual predictions remain order-fragile there.
-
-Lesson so far: readout × backbone interact — token-space pseudo-
-likelihood (r1_span), marker representations (L2 on f2), and pooled
-span features each expose different signals. A Jev-scale model needs
-the training objective to place the signal where the head reads it.
-
-## Calibration (f2-spanes-50k + spanpool, v4_holdout_clean, n≈1900/lvl)
-
-| model | lvl | acc | brier | ECE | NLL | auto@5% |
-|---|---|---|---|---|---|---|
-| CE (raw, T=1) | L0 | 0.729 | 0.179 | 0.026 | 0.544 | 0.086 |
-| | L1 | 0.670 | 0.213 | 0.060 | 0.622 | 0.057 |
-| | L2 | 0.706 | 0.182 | 0.060 | 0.539 | 0.161 |
-| | L3 | 0.542 | 0.244 | 0.044 | 0.680 | 0.006 |
-| CE+RL (raw) | L0 | **0.751** | 0.178 | 0.054 | 0.541 | 0.106 |
-| | L1 | 0.664 | 0.214 | 0.044 | 0.621 | 0.064 |
-| | L2 | 0.694 | 0.190 | 0.055 | 0.559 | 0.075 |
-| | L3 | 0.544 | 0.244 | 0.046 | 0.681 | 0.013 |
-
-Three findings:
-
-1. **CE alone is nearly calibrated** — ECE 0.03–0.06 raw, matching the
-   Laya/TypeSafe observation that supervised training captures most of
-   the calibration; the reliability curve tracks tightly (L2: conf
-   0.65→acc 0.70, 0.75→0.81, 0.85→0.91, 0.94→0.95).
-2. **The scoring-rule RL term (RCDL-lite: REINFORCE over perturbed
-   logits, log + 0.75·spherical reward) adds ~2 pts on L0** and keeps
-   calibration honest — it refines distribution shape, not just argmax.
-3. **Temperature transfer is domain-sensitive**: T=2.2–2.4 fitted on
-   v3_eval barely helps (sometimes hurts) on v4_holdout — the batteries
-   have different difficulty mixes, so one global T cannot fix
-   cross-domain shift. Fit T on data matching deployment, or per-level.
-
-L3 remains the frontier: ~0.54 holdout under every readout, confident
-predictions concentrate near 0.5 (bin 0.52, n≈1600 → acc 0.54). The
-model is honest about not knowing — which is itself a usable System-One
-signal (route L3 to a slower reasoner).
-
-## Tool-call decisions (ecological domain, eval = held-out lit sources)
-
-`data/build_toolcall_decisions.py` converts the verified ecoreasoner
-tool-call corpus into System-One decisions: `choice` (K=10 tools),
-`noul` (is the proposed call valid?), `score` (0 wrong tool / 1 wrong
-args / 2 correct). Train/dev from `toolcalls_fase3_500` (n=500); eval
-from `lit_gold+pilot4+evolucion` (n=480, distinct sources — no leakage).
-Battery: 2975 train / 525 dev / 3360 eval questions.
-
-f2-spanes-50k + spanpool head, 6000 steps FT on all three kinds, T=1.18
-fit on dev:
-
-| kind | n | acc | chance | flip | brier | ECE | auto@5% |
-|---|---|---|---|---|---|---|---|
-| choice K=10 | 480 | 0.256 | 0.10 | 0.91 | 1.130 | 0.444 | 0.015 |
-| noul K=2 | 1440 | 0.666 | 0.67 base | 0.51 | 0.449 | 0.040 | 0.0 |
-| score K=3 | 1440 | 0.324 | 0.33 | 0.58 | 0.671 | 0.031 | 0.0 |
-
-R1 zero-shot (same backbone, no training) is worse everywhere — choice
-0.069 (below chance), noul 0.339, score 0.331, T=8.0 (≈uniform).
-
-Honest read: real but weak signal on tool *choice* (2.5× chance, still
-order-unstable); noul is near the majority-class rate and score is at
-chance — the backbone lacks the semantic grounding to rank 10 ecological
-tools or grade call correctness. Training was still climbing at 6k steps
-(train_acc ~0.6); this is a floor, not a ceiling.
-
-We evaluated `jev-1.13.0` internally on the same battery as a
-reference point. Numbers are kept internal — TypeSafe's MCA §2.3(f)
-prohibits publishing benchmark/performance information about the
-service (and §2.3(b) prohibits distilling its outputs). For our own
-model only: tool-call decisions remain far below production-grade
-System One quality; the gap is backbone capacity, not readout.
-
-**OLMo-2-13B distillation (legal path — Apache-2.0 teacher on KU HPC,
-letter-logprob extraction via Ollama):** soft labels joined by qid,
-KL+CE (soft_weight 0.4, T=2). Null result — choice 0.269 (+0.01),
-noul 0.662, score 0.319. Teacher-gold agreement itself is 0.92/0.67/0.50
-(eval): the bottleneck is backbone capacity, not label softness.
-
-## Evaluate a System One endpoint (internal use)
+`reverse_jev/dapt.py` continues the backbone's native masked-diffusion
+objective (`mask ~ U(0,1)`, CE/t) on a domain corpus via LoRA — inject
+domain knowledge into the weights, then retrain the heads on top:
 
 ```bash
-python -m reverse_jev.eval --remote https://api.typesafe.ai \
-    --api-key-file ~/env/typesafe-key --data evals/eco_decisions.jsonl
+python -m reverse_jev.dapt \
+    --hf-backbone GSAI-ML/LLaDA-8B-Instruct \
+    --corpus papers.jsonl --field text \
+    --out runs/dapt --steps 6000 --bs 16 --seq-len 1024
+# then retrain heads with --lora-adapter runs/dapt/lora-final
 ```
 
-Reports accuracy / Brier / ECE / automation@5%-error per question type —
-the same numbers our local model reports, so comparisons are
-apples-to-apples. For remote services, keep results internal: their
-terms typically prohibit publishing performance numbers.
+The same loop adapts any masked-diffusion checkpoint (e.g.
+`MdLMMoE` from [alrobles/ecoreasoner](https://github.com/alrobles/ecoreasoner)
+via `--ckpt`).
 
-## Convert ecoreasoner pairs to decision data
+## Repo map
 
-```bash
-python data/convert_pairs.py --pairs pairs_L3.jsonl \
-    --tokenizer GSAI-ML/LLaDA-8B-Instruct --out evals/pairs_L3_decisions.jsonl
-```
-
-## Train (RCDL-lite)
-
-```bash
-python -m reverse_jev.train --data train.jsonl --dev dev.jsonl \
-    --ckpt runs/f0/checkpoint-g10000/model.pt --out runs/dec-001 \
-    --steps 2000 --lr 2e-5 --accum 8            # CE only
-# + --rl 1.0 for the REINFORCE scoring-rule term (log + 0.75·spherical)
-```
-
-Post-hoc temperature is fitted on `--dev` and saved to `temperature.json`.
-
-## Serve (TypeSafe-SDK-compatible)
-
-```bash
-REVJEV_CKPT=runs/dec-001/model.pt uvicorn reverse_jev.serve:app --port 8009
-```
-
-```python
-from typesafe_sdk import TypeSafeClient, Noul
-client = TypeSafeClient(api_key="local", base_url="http://127.0.0.1:8009")
-client.system_one(state="...", questions={"q": Noul(instructions="...")})
-```
-
-## Layout
-
-| path | what |
+| path | qué |
 |---|---|
-| `reverse_jev/model.py` | MdLMMoE (vendored v2: RoPE/weight-tying/MoE) + DecisionHead + checkpoint loader |
-| `reverse_jev/readout.py` | R1 token-slot readout: options → id sets → sliced softmax |
-| `reverse_jev/eval.py` | pairs E0 (R1 vs denoise_loss) + decision metrics (acc/Brier/ECE/automation) + remote Jev eval |
-| `reverse_jev/train.py` | decision fine-tune: sliced-softmax CE + optional REINFORCE scoring rule + temperature fit |
-| `reverse_jev/serve.py` | `POST /v1/systemone` compatible with `typesafe-sdk` |
-| `reverse_jev/data.py` | pairs/System-One JSONL loaders, dev/test split |
-| `data/convert_pairs.py` | ecoreasoner pairs → decision JSONL |
-| `tests/test_smoke.py` | CPU smoke tests, tiny random model |
+| `reverse_jev/model.py` | MdLMMoE + HFBackbone + heads + canonical layout |
+| `reverse_jev/train.py` | head training (CE, ordinal, RL-lite) |
+| `reverse_jev/eval.py` | acc/ECE/flip/auto@5%, temp-fit, remote API eval |
+| `reverse_jev/dapt.py` | domain-adaptive pretraining (LoRA) |
+| `data/` | battery builders + benchmark converters |
+| `scripts/*.slurm` | reproducible jobs (KU HPC) |
+| `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |
+| `paper/main.tex` | arXiv draft |
 
 ## License
 
-MIT — A.L. Robles Fernández
+Apache-2.0 (code + heads). Backbones and datasets keep their own
+licenses. Third-party published numbers are cited, not reproduced.

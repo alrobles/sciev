@@ -35,9 +35,11 @@ loss improves graded scoring ($+9$ points). (3)~Scaling training data
 $30\times$ on an out-of-domain corpus improves in-distribution accuracy to
 $0.96$ but does not transfer ($-13$ points on the target domain), showing
 that coverage of the target reasoning distribution---not volume---is the
-binding constraint. On public benchmarks, \ours{} reaches \todo{bench\_eval
-numbers} accuracy on GPQA and \todo{} on SciFact verification, within reach
-of published System-One results on general classification.
+binding constraint. On public benchmarks, \ours{} reaches 0.853 on
+SciFact claim verification and transfers zero-shot to general
+classification (0.930 SST-2, 0.854 AG News), while parametric
+knowledge tasks remain bounded by the backbone ceiling (0.315 GPQA
+vs.\ backbone $\approx$0.33).
 \end{abstract}
 
 \section{Introduction}
@@ -151,21 +153,25 @@ causal/multihop/negation reasoning absent from the source corpus.}
 \toprule
 benchmark & type & \ours{} & reference \\
 \midrule
-GPQA main       & choice & \todo{} & GPT-4 $\sim$0.39; expert $\sim$0.65 \\
-GPQA diamond    & choice & \todo{} & -- \\
-SciFact         & noul   & \todo{} & -- \\
-SciFact         & score  & \todo{} & -- \\
+GPQA main       & choice & 0.315 & GPT-4 $\sim$0.39; expert $\sim$0.65; backbone ceiling $\sim$0.33 \\
+GPQA diamond    & choice & 0.328 & -- \\
+SciFact         & noul   & \textbf{0.853} & -- \\
+SciFact         & score  & 0.624 & -- \\
 \midrule
-Enron spam      & choice & \todo{} & published System-One: 0.987 \\
-SST-2           & choice & \todo{} & 0.957 \\
-AG News         & choice & \todo{} & 0.913 \\
-Banking77       & choice & \todo{} & 0.760 \\
+Enron spam      & choice & 0.752 & published System-One: 0.987 \\
+SST-2           & choice & \textbf{0.930} & 0.957 \\
+AG News         & choice & \textbf{0.854} & 0.913 \\
+Banking77 ($K{=}77$) & choice & 0.229 & 0.760 \\
 \bottomrule
 \end{tabular}
-\caption{Zero-shot transfer to public benchmarks. Published System-One
-numbers are third-party measurements (Kumar, 2026) on identical public
-datasets; our scientific decision heads were trained on an unrelated
-domain.}
+\caption{Zero-shot transfer to public benchmarks (eval-only; temperature
+fitted on the battery dev split, no benchmark data seen). Published
+System-One numbers are third-party measurements (Kumar, 2026) on
+identical public datasets. GPQA accuracy sits at the reported backbone
+ceiling (LLaDA-8B $\approx$0.33), indicating the readout already
+extracts the backbone's accessible parametric knowledge. Transfer to
+$K{\le}4$ classification is strong (SST-2, AG News); $K{=}77$ degrades
+because training used $K{\le}4$.}
 \end{table}
 
 \section{Discussion}
