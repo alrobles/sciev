@@ -1,9 +1,12 @@
-# reverse-jev
+# Sciev
 
-Open **System-One-style decision models** on a frozen masked-diffusion
-backbone. Typed questions (`choice` / `noul` / `score`) over a `state`,
-answered with calibrated probabilities in **one forward pass** — no text
-generation, nothing to parse, nothing to hallucinate.
+**Sciev** (`sci`·ence + `ev`·aluation) — open **System-One-style
+decision models** on a frozen masked-diffusion backbone. Typed
+questions (`choice` / `noul` / `score`) over a `state`, answered with
+calibrated probabilities in **one forward pass** — no text generation,
+nothing to parse, nothing to hallucinate.
+
+*(working repo name: `reverse-jev`; package `reverse_jev` for now)*
 
 General-purpose by design, with a scientific specialty: the heads are
 trained on passage-grounded scientific decisions and transfer zero-shot

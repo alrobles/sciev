@@ -1,6 +1,7 @@
 # Model Card — Sciev v0.1
 
-> Working name: **Sciev** (`sci`·ence + `ev`·aluation) — final branding TBD.
+> **Sciev** (`sci`·ence + `ev`·aluation): general-purpose typed
+> decisions with a scientific specialty.
 
 ## What it is
 
