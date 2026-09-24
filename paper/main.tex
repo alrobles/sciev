@@ -43,11 +43,57 @@ vs.\ backbone $\approx$0.33).
 \end{abstract}
 
 \section{Introduction}
-% Motivation: scientific pipelines need typed decisions, not generated text.
-% Proprietary System-One models (Jev, TypeSafe AI) are closed; the underlying
-% architecture is unclear. We build an open equivalent and study what matters.
-\todo{intro: typed decisions vs generation; routing to System Two;
-contributions list}
+
+Automated scientific pipelines---agentic literature review, claim
+verification, data extraction, routing to slower reasoning
+components---are built out of small structured judgments: \emph{which}
+of these options answers the question, \emph{does} the evidence support
+the claim, \emph{how} good is this candidate answer. Today these
+judgments are typically extracted from generative LLMs by prompting for
+JSON and parsing the output, a pipeline that is slow, brittle under
+format drift, and poorly calibrated.
+
+A recent class of models removes generation entirely: given an
+unstructured state and a set of typed questions, a \emph{System-One}
+model returns typed values---a choice among options, a yes/no
+probability, an ordinal score---each with a calibrated probability, in a
+single forward pass. The flagship proprietary model of this class is
+Jev (TypeSafe AI, 2026); open reimplementations appeared within days of
+its release (kev, openjev, laya, SemIf), all built on autoregressive or
+encoder backbones.
+
+We ask what an open System-One model needs to be good at, and build one
+on the other major family of language models: a \emph{masked-diffusion}
+backbone (LLaDA-8B), whose bidirectional attention is a natural fit for
+decision readouts that compare each option against the full context.
+Rather than fine-tuning the backbone---which we show causes catastrophic
+forgetting---we train small specialist heads per decision type on frozen
+multi-layer hidden states. Our contributions:
+
+\begin{itemize}
+\item \textbf{Exact permutation invariance by canonical ordering.}
+Sorting options deterministically by content makes the presentation
+order a pure function of the option set: the option-order flip rate is
+$0.00$ by construction, where train-time logit averaging neither
+achieves invariance nor preserves accuracy.
+\item \textbf{Specialist heads per decision type.} Multi-layer
+attention pooling over option spans improves choice ($+7$ points over
+mean pooling) while hurting binary verification---different decision
+types want different readouts. An ordinal auxiliary loss improves
+graded scoring ($+9$ points).
+\item \textbf{The backbone is the knowledge bound.} A $30\times$
+out-of-domain data increase fails to transfer ($-13$ points), and on
+GPQA the head reaches the backbone's reported ceiling ($0.315$ vs.\
+$\approx0.33$): decision accuracy on knowledge tasks is a property of
+the backbone, not the readout. Domain knowledge must be injected into
+the weights---which we do via LoRA domain-adaptive pretraining on
+scientific full texts.
+\end{itemize}
+
+We evaluate on a passage-grounded scientific decision battery and on
+public benchmarks (GPQA, SciFact, and four general classification
+sets), reporting accuracy, calibration, option-order flip rate, and
+automation at 5\% error.
 
 \section{Setup}
 \paragraph{Decision types.}
@@ -87,10 +133,18 @@ of decisions that can be auto-accepted while keeping realized error $\le
 
 \section{Experiments}
 \subsection{Scientific decision battery}
-% elite battery: passage-grounded scientific QA, typed by reasoning kind
-% (factual, causal, multihop, negation, numerical, definitional);
-% pid-disjoint splits; 2240/6720/6720 choice/noul/score train rows.
-\todo{describe elite battery + v2 corpus (qa\_raw, 25K pids, 3 corpora)}
+The \emph{elite} battery is built from passage-grounded scientific QA
+typed by reasoning kind (factual, causal, multihop, negation,
+numerical, definitional); each passage generates a choice item ($K{=}4$,
+one gold + three distractors), a noul item (supported vs.\ unsupported
+claim), and a score item (correct / related-but-wrong / unrelated
+answer). Splits are passage-disjoint to prevent leakage
+(2{,}240/6{,}720/6{,}720 train rows per type). The \emph{v2} battery
+scales the same construction to 25{,}000 passages from three raw QA
+corpora (physics/polymer LaTeX full texts, astronomy, and a derived
+set) with groundedness filters---content-word recall $\ge 0.5$ and
+numeric binding---yielding $\sim$470{,}000 training decisions; we use
+it to probe the data-scaling question.
 
 \subsection{Public benchmarks}
 GPQA main (448 graduate-level questions) and diamond subset (198) as
@@ -175,15 +229,46 @@ because training used $K{\le}4$.}
 \end{table}
 
 \section{Discussion}
-\todo{what a System-One layer buys: determinism, calibration, automation
-budget; routing uncertain cases (auto@5\%); the domain-coverage lesson;
-relation to published System-One results (third-party reports only).}
+
+\paragraph{What a decision layer buys.}
+The value of a System-One component is not only accuracy but
+\emph{operating characteristics}: determinism (canonical ordering makes
+predictions a pure function of the option set), calibrated
+probabilities (ECE $0.03$--$0.12$ after temperature fitting), and a
+usable automation budget---82\% of choice traffic on our scientific
+battery can be auto-accepted at $\le$5\% realized error, which is what
+makes routing to a slower System-Two component a quantified decision
+rather than a heuristic.
+
+\paragraph{Division of labor between backbone and head.}
+Our results consistently point to a clean separation: the readout
+determines \emph{how well accessible information is used} (pooling,
+ordering, ordinality), while the backbone determines \emph{what is
+knowable at all} (GPQA at backbone ceiling; zero-shot transfer of
+grounding skills to SST-2/AG News; collapse on $K{=}77$ for lack of
+training coverage). This suggests the development loop for open
+decision models: keep the head recipe fixed, improve the backbone's
+domain knowledge (domain-adaptive pretraining, or a natively trained
+domain backbone), and treat benchmarks like GPQA as backbone probes.
+
+\paragraph{Relation to the ecosystem.}
+Concurrent open reimplementations (kev, openjev, laya) share the API
+contract but differ in backbone and readout; none is diffusion-based,
+and none reports exact permutation invariance---our canonical ordering
+achieves it by construction rather than by augmentation. Third-party
+measurements of the proprietary reference on public datasets (Kumar,
+2026) place it well above all open entries on general classification;
+on scientific verification the margin is much smaller (SciFact noul:
+ours $0.853$ vs.\ reported $\sim$0.89).
 
 \section{Limitations}
-Backbone pretraining may include benchmark-adjacent text (standard public
-benchmark caveat). Our model is trained on one scientific QA distribution;
-cross-domain transfer is limited by construction. Score remains the weakest
-decision type for all systems studied, including the proprietary reference.
+Backbone pretraining may include benchmark-adjacent text (the standard
+public-benchmark caveat). Heads are trained on one decision
+distribution; $K>4$ degrades (option tournamenting is future work), and
+cross-domain transfer is limited by construction. Score remains the
+weakest decision type for all measured systems, including the
+proprietary reference. Our proprietary-reference comparisons cite
+third-party reports rather than our own measurements.
 
 \bibliographystyle{plain}
 \begin{thebibliography}{9}
