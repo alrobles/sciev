@@ -1,0 +1,21 @@
+[wrote] /home/alrobles/GitHub/reverse-jev/evals/jev_scifact_score.json
+{
+  "overall": {
+    "n": 340,
+    "accuracy": 0.7029,
+    "brier": 0.4209,
+    "ece": 0.1314,
+    "automation@5%err": 0.1441
+  },
+  "remote": "https://api.typesafe.ai",
+  "model": "jev-1.13.0",
+  "n_request_errors": 0,
+  "errors": [],
+  "score": {
+    "n": 340,
+    "accuracy": 0.7029,
+    "brier": 0.4209,
+    "ece": 0.1314,
+    "automation@5%err": 0.1441
+  }
+}

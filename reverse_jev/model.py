@@ -312,13 +312,17 @@ class HFBackbone(nn.Module):
     """
 
     def __init__(self, name_or_path, device="cpu", dtype="bfloat16",
-                 seq_len=2048):
+                 seq_len=2048, lora_adapter=None):
         super().__init__()
         from transformers import AutoModelForCausalLM
         self.hf_name = name_or_path
         self.hf = AutoModelForCausalLM.from_pretrained(
             name_or_path, trust_remote_code=True,
             torch_dtype=getattr(torch, dtype))
+        if lora_adapter:
+            from peft import PeftModel
+            self.hf = PeftModel.from_pretrained(self.hf, lora_adapter)
+            self.hf = self.hf.merge_and_unload()
         self.hf.to(device)
         self.tok_emb = self.hf.get_input_embeddings()
         cfg = self.hf.config
@@ -413,7 +417,7 @@ def load_backbone(ckpt_path, config=None, device="cpu"):
     return model
 
 
-def load_decision(ckpt_path, config=None, device="cpu"):
+def load_decision(ckpt_path, config=None, device="cpu", lora_adapter=None):
     """Load a decision checkpoint: backbone + optional trained DecisionHead.
 
     Accepts either an ecoreasoner {"model": sd} file (returns head=None)
@@ -424,7 +428,8 @@ def load_decision(ckpt_path, config=None, device="cpu"):
     raw = torch.load(ckpt_path, map_location="cpu")
     head_sd = raw.get("head") if isinstance(raw, dict) else None
     if isinstance(raw, dict) and "hf_backbone" in raw:
-        model = HFBackbone(raw["hf_backbone"], device=device)
+        model = HFBackbone(raw["hf_backbone"], device=device,
+                           lora_adapter=lora_adapter or raw.get("lora_adapter"))
     else:
         model = load_backbone(ckpt_path, config, device=device)
     head = None

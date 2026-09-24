@@ -1,0 +1,21 @@
+[wrote] evals/jev_gpqa_main.json
+{
+  "overall": {
+    "n": 448,
+    "accuracy": 0.7098,
+    "brier": 0.4094,
+    "ece": 0.062,
+    "automation@5%err": 0.0603
+  },
+  "remote": "https://api.typesafe.ai",
+  "model": "jev-1.13.0",
+  "n_request_errors": 0,
+  "errors": [],
+  "choice": {
+    "n": 448,
+    "accuracy": 0.7098,
+    "brier": 0.4094,
+    "ece": 0.062,
+    "automation@5%err": 0.0603
+  }
+}

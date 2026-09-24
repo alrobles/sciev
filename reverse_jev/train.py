@@ -232,6 +232,9 @@ def main():
     ap.add_argument("--hf-backbone", default=None,
                     help="HF model name/path (e.g. GSAI-ML/LLaDA-8B-Instruct) "
                          "instead of an ecoreasoner --ckpt")
+    ap.add_argument("--lora-adapter", default=None,
+                    help="LoRA adapter dir (e.g. DAPT output) merged into the "
+                         "HF backbone before training")
     ap.add_argument("--config", default=None)
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--out", required=True)
@@ -268,7 +271,8 @@ def main():
             cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
         if args.hf_backbone:
             from .model import HFBackbone
-            model = HFBackbone(args.hf_backbone, device=args.device)
+            model = HFBackbone(args.hf_backbone, device=args.device,
+                               lora_adapter=args.lora_adapter)
         else:
             model = load_backbone(args.ckpt, cfg, device=args.device)
         args.layers_list = [int(x) for x in args.r2_layers.split(",")]
@@ -310,6 +314,8 @@ def main():
                          "decisions_train": args.decisions_train}}
         if isinstance(model, HFBackbone):
             ckpt["hf_backbone"] = model.hf_name   # head only; 16GB not stored
+            if args.lora_adapter:
+                ckpt["lora_adapter"] = args.lora_adapter
         else:
             ckpt["model"] = model.state_dict()
         torch.save(ckpt, out_dir / "decision.pt")

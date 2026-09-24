@@ -592,6 +592,9 @@ def main():
     ap.add_argument("--hf-backbone", default=None,
                     help="HF model name/path (e.g. GSAI-ML/LLaDA-8B-Instruct) "
                          "instead of an ecoreasoner --ckpt")
+    ap.add_argument("--lora-adapter", default=None,
+                    help="LoRA adapter dir (e.g. DAPT output) merged into the "
+                         "HF backbone before eval")
     ap.add_argument("--head", help="trained DecisionHead state (enables r2 eval)")
     ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
                     default="marker")
@@ -646,7 +649,8 @@ def main():
             cfg = yaml.safe_load(Path(args.config).read_text()).get("model", {})
         head = None
         if args.head:
-            model = (HFBackbone(args.hf_backbone, device=args.device)
+            model = (HFBackbone(args.hf_backbone, device=args.device,
+                                lora_adapter=args.lora_adapter)
                      if args.hf_backbone
                      else load_backbone(args.ckpt, cfg, device=args.device))
             head = DecisionHead(model.tok_emb.embedding_dim).to(args.device)

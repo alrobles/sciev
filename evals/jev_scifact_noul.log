@@ -1,0 +1,21 @@
+[wrote] /home/alrobles/GitHub/reverse-jev/evals/jev_scifact_noul.json
+{
+  "overall": {
+    "n": 340,
+    "accuracy": 0.8882,
+    "brier": 0.1672,
+    "ece": 0.0205,
+    "automation@5%err": 0.7676
+  },
+  "remote": "https://api.typesafe.ai",
+  "model": "jev-1.13.0",
+  "n_request_errors": 0,
+  "errors": [],
+  "noul": {
+    "n": 340,
+    "accuracy": 0.8882,
+    "brier": 0.1672,
+    "ece": 0.0205,
+    "automation@5%err": 0.7676
+  }
+}

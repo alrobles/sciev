@@ -1,0 +1,194 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\ours}{\textsc{Open-Jev}}
+
+\title{Open System-One Decision Models:\\
+Frozen Diffusion-LM Backbones and Specialist Decision Heads\\
+for Calibrated Scientific Decisions}
+\author{Anonymous}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Structured decisions---selecting among options, verifying whether evidence
+supports a claim, and grading response quality on ordinal scales---are the
+atomic operations of automated scientific pipelines. Proprietary
+``System-One'' models deliver such decisions as typed API calls without
+generation, but are closed. We present an open, trainable counterpart: a
+frozen masked-diffusion language model backbone (LLaDA-8B) with small
+specialist decision heads producing probabilities for three decision types
+(choice, noul, score). We contribute three findings. (1)~A deterministic
+canonical ordering of options yields exact permutation invariance
+(option-order flip rate $0.77 \to 0.00$), where train-time logit averaging
+does not. (2)~Multi-layer attention pooling over option spans outperforms
+last-layer mean pooling for choice ($+7$ points), while an ordinal auxiliary
+loss improves graded scoring ($+9$ points). (3)~Scaling training data
+$30\times$ on an out-of-domain corpus improves in-distribution accuracy to
+$0.96$ but does not transfer ($-13$ points on the target domain), showing
+that coverage of the target reasoning distribution---not volume---is the
+binding constraint. On public benchmarks, \ours{} reaches \todo{bench\_eval
+numbers} accuracy on GPQA and \todo{} on SciFact verification, within reach
+of published System-One results on general classification.
+\end{abstract}
+
+\section{Introduction}
+% Motivation: scientific pipelines need typed decisions, not generated text.
+% Proprietary System-One models (Jev, TypeSafe AI) are closed; the underlying
+% architecture is unclear. We build an open equivalent and study what matters.
+\todo{intro: typed decisions vs generation; routing to System Two;
+contributions list}
+
+\section{Setup}
+\paragraph{Decision types.}
+We consider three typed decisions over a state (context) and a question:
+\textbf{choice} selects one of $K$ answer options; \textbf{noul} decides
+whether evidence supports a claim ($K{=}2$); \textbf{score} assigns an
+ordinal grade $0 < 1 < 2$ (unrelated / related-but-wrong / correct).
+
+\paragraph{Model.}
+Each example is encoded as a single masked sequence: context, question, and
+options separated by marker tokens. A frozen masked-diffusion backbone
+(LLaDA-8B-Instruct) produces token representations; a specialist head per
+decision type maps pooled option-span features to class logits. Two head
+architectures are compared: a mean-pooled MLP and \emph{AttnPool}, a learned
+query attending over each option span on concatenated hidden states from
+layers $\{8,16,24,32\}$. Only the heads are trained ($\sim$2M parameters);
+the backbone remains frozen.
+
+\paragraph{Canonical ordering.}
+Options are sorted by token-id content before encoding, and gold indices
+remapped. The presentation order is thus a pure function of the option
+\emph{set}: any input permutation collapses to the same sequence and
+permutation invariance holds exactly, at training, calibration, and
+evaluation.
+
+\paragraph{Ordinal auxiliary loss.}
+For score we add a CORAL-style term
+$\sum_{j=1}^{K-1} \mathrm{BCE}\big(P(y \ge j),\,\mathbf{1}[g \ge j]\big)$
+on cumulative softmax mass, respecting the grade order without changing the
+$K$-way decode.
+
+\paragraph{Metrics.}
+Accuracy, expected calibration error (ECE), option-order flip rate (accuracy
+change under input permutation), and \emph{automation@5\%err}: the fraction
+of decisions that can be auto-accepted while keeping realized error $\le
+5\%$---the operating metric for a decision layer.
+
+\section{Experiments}
+\subsection{Scientific decision battery}
+% elite battery: passage-grounded scientific QA, typed by reasoning kind
+% (factual, causal, multihop, negation, numerical, definitional);
+% pid-disjoint splits; 2240/6720/6720 choice/noul/score train rows.
+\todo{describe elite battery + v2 corpus (qa\_raw, 25K pids, 3 corpora)}
+
+\subsection{Public benchmarks}
+GPQA main (448 graduate-level questions) and diamond subset (198) as
+choice; SciFact dev (340 claim--abstract pairs) as noul and 3-way score;
+plus general classification (SST-2, AG News, Enron spam, Banking77) to
+probe out-of-domain transfer. Benchmarks are eval-only; temperature is
+fitted on the battery dev split (no benchmark leakage).
+
+\section{Results}
+\subsection{Ablations on the scientific battery}
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lcccc}
+\toprule
+ & choice & noul & score & flip (choice) \\
+\midrule
+Baseline (mixed MLP)        & 0.775 & 0.707 & 0.522 & 0.76 \\
+$+$ orders$=4$              & 0.721 & 0.782 & 0.586 & --   \\
+$+$ AttnPool                & 0.847 & 0.636 & 0.588 & 0.75 \\
+$+$ both                    & 0.749 & 0.780 & 0.576 & 0.70 \\
+\midrule
+Per-type heads              & 0.876 & 0.710 & 0.574 & 0.77 \\
+Per-type $+$ canon. $+$ ord. & \textbf{0.870} & \textbf{0.783} & \textbf{0.608} & \textbf{0.00} \\
+\bottomrule
+\end{tabular}
+\caption{Ablation on the scientific battery (frozen LLaDA-8B). Canonical
+ordering eliminates order sensitivity exactly; per-type specialist heads
+plus AttnPool give the best choice accuracy and automation.}
+\end{table}
+
+Key findings: (1)~train-time logit averaging over permutations does
+\emph{not} fix order sensitivity and costs choice accuracy;
+(2)~canonical ordering achieves flip rate exactly $0$ at no accuracy cost;
+(3)~AttnPool on intermediate layers helps choice ($+7$) but hurts noul,
+motivating per-type heads; (4)~the ordinal auxiliary loss lifts score
+$0.522 \to 0.608$.
+
+\subsection{Data scaling does not transfer across domains}
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lcc}
+\toprule
+ & in-distribution (v2) & elite (target) \\
+\midrule
+choice & 0.965 & 0.738 \\
+noul   & 0.942 & 0.782 \\
+score  & --    & 0.616 \\
+\bottomrule
+\end{tabular}
+\caption{Heads retrained on $30\times$ more data from a different QA
+distribution (qa\_raw corpora) reach near-ceiling in-distribution accuracy
+but do not transfer to the elite battery, whose questions stress
+causal/multihop/negation reasoning absent from the source corpus.}
+\end{table}
+
+\subsection{Public benchmarks}
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+benchmark & type & \ours{} & reference \\
+\midrule
+GPQA main       & choice & \todo{} & GPT-4 $\sim$0.39; expert $\sim$0.65 \\
+GPQA diamond    & choice & \todo{} & -- \\
+SciFact         & noul   & \todo{} & -- \\
+SciFact         & score  & \todo{} & -- \\
+\midrule
+Enron spam      & choice & \todo{} & published System-One: 0.987 \\
+SST-2           & choice & \todo{} & 0.957 \\
+AG News         & choice & \todo{} & 0.913 \\
+Banking77       & choice & \todo{} & 0.760 \\
+\bottomrule
+\end{tabular}
+\caption{Zero-shot transfer to public benchmarks. Published System-One
+numbers are third-party measurements (Kumar, 2026) on identical public
+datasets; our scientific decision heads were trained on an unrelated
+domain.}
+\end{table}
+
+\section{Discussion}
+\todo{what a System-One layer buys: determinism, calibration, automation
+budget; routing uncertain cases (auto@5\%); the domain-coverage lesson;
+relation to published System-One results (third-party reports only).}
+
+\section{Limitations}
+Backbone pretraining may include benchmark-adjacent text (standard public
+benchmark caveat). Our model is trained on one scientific QA distribution;
+cross-domain transfer is limited by construction. Score remains the weakest
+decision type for all systems studied, including the proprietary reference.
+
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+\bibitem{llada} Nie et al. Large Language Diffusion Models. 2025.
+\bibitem{gpqa} Rein et al. GPQA: A Graduate-Level Google-Proof Q\&A
+Benchmark. COLM 2024.
+\bibitem{scifact} Wadden et al. Fact or Fiction: Verifying Scientific
+Claims. EMNLP 2020.
+\bibitem{kumar} Kumar, A. Jev, measured. Third-party benchmark report, 2026.
+\bibitem{corallike} Cao et al. Rank consistent ordinal regression for
+neural networks. 2020.
+\end{thebibliography}
+
+\end{document}
