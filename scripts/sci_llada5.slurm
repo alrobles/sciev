@@ -24,6 +24,12 @@ PY=/beegfs/a474r867/bioai/venv/bin/python
 LLADA=GSAI-ML/LLaDA-8B-Instruct
 LAYERS="-1,-9,-17,-25"
 mkdir -p "$RUNS"
+LOCK=$RUNS/.sci_llada5.lock
+if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "another sci_llada5 holds the lock; exiting"
+    exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 export HF_HOME=/beegfs/a474r867/hf-cache
 export PYTHONNOUSERSITE=1
 export PYTHONPATH=/beegfs/a474r867/pylibs/tf446:$RJ
