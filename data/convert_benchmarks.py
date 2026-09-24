@@ -119,13 +119,76 @@ def conv_scifact(src, out_prefix, tok, rng):
                 for t in text_by_state.values()])
 
 
+def conv_classification(src, out, tok, rng, cfg):
+    """Generic K-way classification -> choice rows.
+
+    cfg: {text_field, label_names, ctx_fmt, question, label_field?,
+          labels_file?}. Options = label_names in fixed order, gold = label.
+    """
+    labels = cfg.get("label_names")
+    if cfg.get("labels_file"):
+        labels = [x.replace("_", " ")
+                  for x in json.loads(Path(cfg["labels_file"]).read_text())]
+    if src.endswith(".parquet"):
+        import pandas as pd
+        rows = pd.read_parquet(src).to_dict("records")
+    else:
+        rows = [json.loads(l) for l in open(src, encoding="utf-8")
+                if l.strip()]
+    id_rows, text_by_state = [], {}
+    skipped = 0
+    for i, r in enumerate(rows):
+        text = str(r[cfg["text_field"]]).strip()
+        gold = int(r[cfg["label_field"]])
+        if not text or not (0 <= gold < len(labels)):
+            skipped += 1
+            continue
+        state = cfg["ctx_fmt"].format(t=text)
+        ctx = enc(tok, f"{state}\nQuestion: {cfg['question']}", MAX_CTX)
+        id_rows.append({"ctx": ctx,
+                        "opts": [enc(tok, o, MAX_OPT) for o in labels],
+                        "gold": gold, "kind": "choice",
+                        "qid": f"{cfg['tag']}_{i}"})
+        ts = text_by_state.setdefault(state, {"state": state,
+                                              "questions": {}})
+        ts["questions"][f"{cfg['tag']}_{i}"] = {
+            "type": "choice", "instructions": cfg["question"],
+            "criteria": {o: None for o in labels}, "label": labels[gold]}
+    write_rows(out, id_rows, list(text_by_state.values()))
+    if skipped:
+        print(f"[skip] {skipped} rows")
+
+
+CLASSIF_CFGS = {
+    "sst2": {"text_field": "sentence", "label_field": "label",
+             "label_names": ["negative", "positive"],
+             "ctx_fmt": "Text: {t}",
+             "question": "What is the sentiment of this text?"},
+    "ag_news": {"text_field": "text", "label_field": "label",
+                "label_names": ["World", "Sports", "Business",
+                                "Science/Technology"],
+                "ctx_fmt": "Article: {t}",
+                "question": "Which category does this article belong to?"},
+    "banking77": {"text_field": "text", "label_field": "label",
+                  "ctx_fmt": "Customer message: {t}",
+                  "question": "What is the customer's intent?"},
+    "enron": {"text_field": "text", "label_field": "label",
+              "label_names": ["not spam", "spam"],
+              "ctx_fmt": "Email: {t}",
+              "question": "Is this email spam?"},
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bench", choices=["gpqa", "scifact"], required=True)
+    ap.add_argument("--bench", choices=["gpqa", "scifact",
+                                        *CLASSIF_CFGS], required=True)
     ap.add_argument("--src", required=True)
     ap.add_argument("--out", default=None, help="gpqa: output jsonl")
     ap.add_argument("--out-prefix", default=None,
                     help="scifact: prefix for _noul/_score_eval.jsonl")
+    ap.add_argument("--labels-file", default=None,
+                    help="json list of label names (banking77)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--seed", type=int, default=7331)
     args = ap.parse_args()
@@ -135,8 +198,13 @@ def main():
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
     if args.bench == "gpqa":
         conv_gpqa(args.src, args.out, tok, rng)
-    else:
+    elif args.bench == "scifact":
         conv_scifact(args.src, args.out_prefix, tok, rng)
+    else:
+        cfg = dict(CLASSIF_CFGS[args.bench], tag=args.bench)
+        if args.labels_file:
+            cfg["labels_file"] = args.labels_file
+        conv_classification(args.src, args.out, tok, rng, cfg)
 
 
 if __name__ == "__main__":

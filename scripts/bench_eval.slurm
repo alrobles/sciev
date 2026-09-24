@@ -50,4 +50,15 @@ for KIND in noul score; do
         --decisions-eval "$EXT/scifact/scifact_dev_${KIND}_eval.jsonl" \
         --device cuda --out "$RUNS/eval_c_${KIND}_scifact.json"
 done
+# Jev-contrast battery (published Jev numbers: Kumar 2026):
+# enron 98.7 / sst2 95.7 / agnews 91.3 / banking77 76.0
+for DS in enron/enron sst2/sst2 ag_news/agnews banking77/banking77; do
+    echo "=== EVAL $DS (c_choice) ==="
+    $PY -m reverse_jev.eval \
+        --ckpt "$RUNS/c_choice/decision.pt" \
+        --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
+        --r2-temp-fit-decisions "$BAT/sci_choice_dev.jsonl" \
+        --decisions-eval "$EXT/${DS}_choice_eval.jsonl" \
+        --device cuda --out "$RUNS/eval_c_choice_$(basename $DS).json"
+done
 echo "ALL_DONE"
