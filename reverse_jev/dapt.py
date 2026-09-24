@@ -93,7 +93,15 @@ def main():
     print("[dapt] mask_id:", mask_id)
 
     model = lora_wrap(base, args.lora_r, args.lora_alpha, args.lora_dropout)
-    model.gradient_checkpointing_enable()
+    # LLaDA remote-code doesn't support HF gradient_checkpointing_enable;
+    # it has its own block-level activation checkpointing instead.
+    import sys
+    inner = getattr(base, "model", base)
+    mod = sys.modules.get(type(inner).__module__)
+    acs = getattr(mod, "ActivationCheckpointingStrategy", None)
+    if acs is not None and hasattr(inner, "set_activation_checkpointing"):
+        inner.set_activation_checkpointing(acs.whole_layer)
+        print("[dapt] activation checkpointing: whole_layer")
     model.print_trainable_parameters()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=0.0, betas=(0.9, 0.95))
