@@ -76,6 +76,10 @@ def main():
     ap.add_argument("--docs", type=int, default=0, help="cap corpus docs")
     ap.add_argument("--save-every", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=7331)
+    ap.add_argument("--resume", default=None,
+                    help="existing adapter dir to continue training from")
+    ap.add_argument("--start-step", type=int, default=0,
+                    help="steps already completed (scheduler/data offset)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -92,7 +96,13 @@ def main():
                       base.config.vocab_size - 1)
     print("[dapt] mask_id:", mask_id)
 
-    model = lora_wrap(base, args.lora_r, args.lora_alpha, args.lora_dropout)
+    if args.resume:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(base, args.resume, is_trainable=True)
+        print("[dapt] resumed adapter from", args.resume)
+    else:
+        model = lora_wrap(base, args.lora_r, args.lora_alpha,
+                          args.lora_dropout)
     # LLaDA remote-code doesn't support HF gradient_checkpointing_enable;
     # it has its own block-level activation checkpointing instead.
     import sys
@@ -131,7 +141,11 @@ def main():
                   max_length=args.seq_len, padding="longest")
         return enc["input_ids"].to(dev)
 
-    for step in range(1, args.steps + 1):
+    for _ in range(args.start_step):  # fast-forward data + scheduler
+        sched.step()
+        next_batch()
+
+    for step in range(args.start_step + 1, args.steps + 1):
         ids = next_batch()
         t = torch.rand(ids.size(0), 1, device=ids.device)
         p_mask = t.expand_as(ids).float()
@@ -139,10 +153,10 @@ def main():
         m = noise < p_mask
         corrupted = torch.where(m, torch.full_like(ids, mask_id), ids)
         out = model(input_ids=corrupted)
-        logits = out.logits.float()
-        ce = F.cross_entropy(
-            logits[m].view(-1, logits.size(-1)),
-            ids[m].view(-1), reduction="mean")
+        # masked-select in bf16 before fp32 cast: avoids materializing a
+        # [bs, seq, vocab] fp32 tensor (~8 GiB peak at bs16/seq1024)
+        sel = out.logits[m]
+        ce = F.cross_entropy(sel.float(), ids[m], reduction="mean")
         loss = ce / t.mean().clamp(min=1e-3) / args.grad_accum
         loss.backward()
         if step % args.grad_accum == 0:
@@ -153,9 +167,10 @@ def main():
         raw = (ce / t.mean()).item()
         ema = raw if ema is None else 0.98 * ema + 0.02 * raw
         if step % 50 == 0:
+            done = step - args.start_step
             print(f"[dapt] step {step}/{args.steps} ce/t {raw:.3f} "
                   f"ema {ema:.3f} lr {sched.get_last_lr()[0]:.2e} "
-                  f"{(time.time()-t0)/step:.2f}s/it", flush=True)
+                  f"{(time.time()-t0)/max(done,1):.2f}s/it", flush=True)
         if step % args.save_every == 0:
             path = os.path.join(args.out, f"lora-g{step}")
             model.save_pretrained(path)

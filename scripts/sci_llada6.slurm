@@ -9,19 +9,22 @@
 #SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
 #
 # c_* recipe retrained on the DAPT-adapted backbone (LLaDA-8B + papers LoRA).
-# Requires runs/dapt/lora-final (from dapt_llada). Heads: da_*.
+# Requires a trained adapter dir. Heads: ${TAG}_* (default da_*).
 # Evals: GPQA main/diamond + SciFact noul/score + elite regression.
+# Override adapter/tag without editing, e.g.:
+#   sbatch --export=ALL,DAPT=$PWD/runs/dapt/lora-g2000,TAG=dag sci_llada6.slurm
 
 set -euo pipefail
 RJ=/beegfs/a474r867/reverse-jev
 BAT=$RJ/data/sci_battery
 EXT=$RJ/data/bench_external
 RUNS=$RJ/runs/sci
-DAPT=$RJ/runs/dapt/lora-final
+DAPT=${DAPT:-$RJ/runs/dapt/lora-final}
+TAG=${TAG:-da}
 PY=/beegfs/a474r867/bioai/venv/bin/python
 LAYERS="-1,-9,-17,-25"
 mkdir -p "$RUNS"
-LOCK=$RUNS/.sci_llada6.lock
+LOCK=$RUNS/.sci_llada6_${TAG}.lock
 if ! mkdir "$LOCK" 2>/dev/null; then
     echo "another sci_llada6 holds the lock; exiting"; exit 0
 fi
@@ -56,23 +59,23 @@ eval_head () {  # name evalfile out
     $PY -m reverse_jev.eval \
         --ckpt "$RUNS/$name/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
-        --r2-temp-fit-decisions "$BAT/sci_${name#da_}_dev.jsonl" \
+        --r2-temp-fit-decisions "$BAT/sci_${name#*_}_dev.jsonl" \
         --decisions-eval "$ev" \
         --device cuda --out "$RUNS/eval_${out}.json"
 }
 
-train_head da_choice attnpool "$BAT/sci_choice_train.jsonl"
-train_head da_noul   mlp      "$BAT/sci_noul_train.jsonl"
-train_head da_score  mlp      "$BAT/sci_score_train.jsonl" --ordinal 1.0
+train_head ${TAG}_choice attnpool "$BAT/sci_choice_train.jsonl"
+train_head ${TAG}_noul   mlp      "$BAT/sci_noul_train.jsonl"
+train_head ${TAG}_score  mlp      "$BAT/sci_score_train.jsonl" --ordinal 1.0
 
 # elite regression (adapted backbone, same battery)
 for K in choice noul score; do
-    eval_head da_$K "$BAT/sci_${K}_eval.jsonl" "da_${K}_elite"
+    eval_head ${TAG}_$K "$BAT/sci_${K}_eval.jsonl" "${TAG}_${K}_elite"
 done
 # external scientific benchmarks
-eval_head da_choice "$EXT/gpqa/gpqa_main_choice_eval.jsonl"    da_choice_gpqa_main
-eval_head da_choice "$EXT/gpqa/gpqa_diamond_choice_eval.jsonl" da_choice_gpqa_diamond
-eval_head da_noul   "$EXT/scifact/scifact_dev_noul_eval.jsonl" da_noul_scifact
-eval_head da_score  "$EXT/scifact/scifact_dev_score_eval.jsonl" da_score_scifact
+eval_head ${TAG}_choice "$EXT/gpqa/gpqa_main_choice_eval.jsonl"    ${TAG}_choice_gpqa_main
+eval_head ${TAG}_choice "$EXT/gpqa/gpqa_diamond_choice_eval.jsonl" ${TAG}_choice_gpqa_diamond
+eval_head ${TAG}_noul   "$EXT/scifact/scifact_dev_noul_eval.jsonl" ${TAG}_noul_scifact
+eval_head ${TAG}_score  "$EXT/scifact/scifact_dev_score_eval.jsonl" ${TAG}_score_scifact
 
 echo "ALL_DONE"
