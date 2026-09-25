@@ -1,0 +1,16 @@
+# bw1_sr backbone config (ecoreasoner checkpoint-g20)
+# Source: ecoreasoner/scripts/bw1_single.slurm
+#   --hidden 1024 --layers 16 --heads 16 --ff_mult 4
+#   --n_experts 8 --expert_k 2 --seq_len 768
+# fields not in this list are inferred from the state dict by load_backbone.
+model:
+  vocab: 126080
+  hidden: 1024
+  layers: 16
+  heads: 16
+  ff_mult: 4
+  seq_len: 768
+  n_experts: 8
+  k: 2
+  use_rope: false
+  weight_tying: false

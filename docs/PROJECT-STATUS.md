@@ -51,8 +51,8 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | 5 | Fase B datos (sci_battery_v2, 30×) | ✅ — descubrió domain-shift |
 | 6 | Benchmarks externos (GPQA, SciFact, clasificación) | ✅ |
 | 7 | Contraste bidireccional con Jev | ✅ — interno completo |
-| 8 | DAPT-LoRA sobre corpus de papers | 🔄 `dapt_llada` RUNNING |
-| 9 | Heads `da_*` sobre backbone adaptado + re-eval | ⏳ `sci_llada6` listo |
+| 8 | DAPT-LoRA sobre corpus de papers | 🔄 `dapt_llada_r` resume g2000→5000 (ver §7) |
+| 9 | Heads `da_*` sobre backbone adaptado + re-eval | 🔄 `sci_llada6` (TAG=dag sobre g2000) encolado |
 | 10 | Baseline ecoreasoner (bw1_sr + sft lora) | ⏳ pendiente |
 | 11 | Paper arXiv | 🔄 `paper/main.tex` skeleton compilable |
 
@@ -103,21 +103,31 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | No Qwen | — | restricción del usuario; LLaDA/ecoreasoner |
 | Jev números internos no publicables | — | MCA 2.3(f); se citan reportes de terceros |
 
-## 7. Estado actual (jobs)
+## 7. Estado actual (jobs) — actualizado 2026-09-25
 
 | job | estado | qué produce |
 |---|---|---|
 | `bench_eval` | ✅ DONE | tabla completa benchmarks públicos |
-| `dapt_llada` (l40) | 🔄 RUNNING | `runs/dapt/lora-final` (~100M tokens papers) |
-| `sci_llada6` | ⏳ listo para someter | heads `da_*` + eval GPQA/SciFact/elite |
+| `dapt_llada` (30252050) | ⏹ TIMEOUT ~3100/6000 | `runs/dapt/lora-g2000` — 6000 steps (9.5h) nunca cupieron en sixhour |
+| `dapt_llada_a/_l` resubmits | ❌ OOM | a40/l40 (48GB): `logits.float()` = [16,1024,126k] fp32 ~8.3GB de pico; además no había resume — habrían reiniciado de cero |
+| `dapt_llada_r` (30360611) | 🔄 RUNNING pro6000 | resume `--resume lora-g2000 --start-step 2000 --steps 5000` → `lora-final` (~4.8h, ~82M tokens totales) |
+| `sci_llada6` TAG=dag (30360612) | ⏳ PD | heads `dag_*` sobre **lora-g2000** + eval GPQA/SciFact/elite — señal DAPT temprana |
 | baseline ecoreasoner | ⏳ pendiente | punto cero de trayectoria backbone |
+
+Cambios 25-sep: `dapt.py` ganó `--resume`/`--start-step` (PeftModel.from_pretrained
+is_trainable + fast-forward de scheduler y corpus) y el CE ahora hace
+masked-select en bf16 antes del cast fp32 (~8 GiB menos de pico → cabe en
+48GB). `sci_llada6.slurm` acepta `DAPT`/`TAG` por env (`--export=ALL,...`).
 
 ## 8. Siguiente
 
-1. Cuando `lora-final` caiga → `sbatch scripts/sci_llada6.slurm` (×3 GPUs)
-2. Baseline heads sobre ecoreasoner `bw1_sr`+`sft_moe_v2` (16 capas →
+1. Cuando `dag_*` evals caigan → comparar vs `c_*` (criterio: elite no baja
+   >1pt Y SciFact sube O GPQA +3pts) — decide si g2000 ya basta
+2. Cuando `lora-final` (g5000) caiga → `sbatch scripts/sci_llada6.slurm`
+   (TAG=da default) → decisión final de heads para release
+3. Baseline heads sobre ecoreasoner `bw1_sr`+`sft_moe_v2` (16 capas →
    `--r2-layers=-1,-5,-9,-13`)
-3. Rellenar Tabla 3 del paper con números de bench_eval + da_*
-4. Escribir Intro/Discussion; decidir nombre del modelo (Decida? SciDec?
-   — depende de si el dominio queda científico o general)
-5. Decidir venue post-arXiv (workshop ML vs MEE eco)
+4. Tag v0.1 + release público GitHub (repo ya renombrado `sciev-devel`,
+   model card + README listos)
+5. arXiv: paper tiene intro/battery/discussion; falta Tabla 3 con da_*
+6. Decidir venue post-arXiv (workshop ML vs MEE eco)
