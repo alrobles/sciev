@@ -30,7 +30,7 @@ def scientific_rows():
 
 
 def assert_paired(ids, texts):
-    from reverse_jev.decisions import encode_question
+    from sciev.decisions import encode_question
     questions = {qid: (row, question) for row in texts
                  for qid, question in row["questions"].items()}
     assert len(questions) == len(ids)
@@ -450,7 +450,7 @@ def test_scientific_evidence_spans_preserve_question_and_proposed_answer():
         if row["kind"] == "score":
             assert question["instructions"] == "Rate the proposed answer."
             assert question["criteria"] == sci.SCORE_LEGEND
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
     for source, controlled in zip(texts, make_evidence_controls(texts)):
         start, end = source["evidence_span"]
         assert controlled["state"] == source["state"][:start] + source["state"][end:]
@@ -465,7 +465,7 @@ def test_scifact_evidence_spans_cover_title_and_abstract_but_not_claim(tmp_path)
     pd.DataFrame(source_rows).to_parquet(src)
     benchmarks.conv_scifact(src, tmp_path / "sf", CharTokenizer(), random.Random(1), legacy_score=True)
     output = tmp_path / "systemone-v2"
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
     for name in ("noul", "choice", "score_legacy_proxy"):
         ids = rows_from(output / f"sf_{name}_eval.jsonl")
         texts = rows_from(output / f"sf_{name}_eval_text.jsonl")

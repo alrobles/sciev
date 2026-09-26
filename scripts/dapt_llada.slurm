@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Domain-adaptive pretraining of LLaDA-8B on the papers corpus.
 # Native masked-diffusion objective (mask ~ U(0,1), CE/t), LoRA r=16.
@@ -15,7 +15,7 @@
 # via HFBackbone(lora_adapter=...).
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 RUNS=$RJ/runs
 DATA=/beegfs/a474r867/ecoreasoner/data
 PY=/beegfs/a474r867/bioai/venv/bin/python
@@ -34,7 +34,7 @@ if [ -f "$RUNS/dapt/lora-final/adapter_config.json" ]; then
     echo "=== SKIP dapt (lora-final exists) ==="; exit 0
 fi
 
-$PY -m reverse_jev.dapt \
+$PY -m sciev.dapt \
     --hf-backbone GSAI-ML/LLaDA-8B-Instruct \
     --corpus "$DATA/corpus_v4_en.jsonl" \
     --corpus "$DATA/corpus_v4hneg.jsonl" \

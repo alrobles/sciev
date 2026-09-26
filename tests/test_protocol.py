@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from reverse_jev import decisions
-from reverse_jev.protocol import (
+from sciev import decisions
+from sciev.protocol import (
     assert_checkpoint_disjoint,
     assert_disjoint_splits,
     dataset_contract,

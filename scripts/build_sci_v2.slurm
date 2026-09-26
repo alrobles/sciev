@@ -4,15 +4,15 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=03:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Phase B: sci_battery v2 — 25K train passages from qa_raw shards
 # (polymer/physics + astronomy b2 + deriv), groundedness-filtered.
 # Elite dev/eval untouched -> apples-to-apples with all previous numbers.
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 ECO=/beegfs/a474r867/ecoreasoner
 PY=/beegfs/a474r867/bioai/venv/bin/python
 export HF_HOME=/beegfs/a474r867/hf-cache

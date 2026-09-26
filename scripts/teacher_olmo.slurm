@@ -5,11 +5,11 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=05:30:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/toolcall/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/toolcall/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/toolcall/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/toolcall/%x_%j.err
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 ECO=/beegfs/a474r867/ecoreasoner
 BAT=$RJ/data/toolcall_battery
 RUNS=$RJ/runs/toolcall

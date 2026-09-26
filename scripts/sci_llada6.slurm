@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # c_* recipe retrained on the DAPT-adapted backbone (LLaDA-8B + papers LoRA).
 # Requires a trained adapter dir. Heads: ${TAG}_* (default da_*).
@@ -15,7 +15,7 @@
 #   sbatch --export=ALL,DAPT=$PWD/runs/dapt/lora-g2000,TAG=dag sci_llada6.slurm
 
 set -euo pipefail
-RJ=${RJ:-/beegfs/a474r867/reverse-jev}
+RJ=${RJ:-/beegfs/a474r867/sciev}
 BAT=${BAT:-$RJ/data/sci_battery/systemone-v2}
 EXT=${EXT:-$RJ/data/bench_external}
 RUNS=${RUNS:-$RJ/runs/sci}
@@ -62,7 +62,7 @@ train_head () {  # name kind data extra...
     local name=$1 kind=$2 data=$3; shift 3
     reject_existing "$RUNS/$name"
     echo "=== TRAIN $name ==="
-    "$PY" -m reverse_jev.train \
+    "$PY" -m sciev.train \
         --recipe scientific-v1 --decision-type "$kind" \
         --hf-backbone "$LLADA" "${ADAPTER_ARGS[@]}" \
         --decisions-train "$data" \
@@ -76,7 +76,7 @@ eval_head () {  # name evalfile out
     local kind=${name##*_}
     reject_existing "$RUNS/eval_${out}.json"
     echo "=== EVAL $out ($name) ==="
-    "$PY" -m reverse_jev.eval \
+    "$PY" -m sciev.eval \
         --ckpt "$RUNS/$name/decision.pt" \
         --decision-type "$kind" --seed "$SEED" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \

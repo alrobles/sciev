@@ -14,10 +14,10 @@ todos los cambios de accuracy al DAPT.
 
 | recurso | ubicación |
 |---|---|
-| Repo principal | `github.com/alrobles/sciev-devel` · local `~/GitHub/reverse-jev` · cluster `/beegfs/a474r867/reverse-jev` |
+| Repo principal | `github.com/alrobles/sciev-devel` · local `~/GitHub/sciev` · cluster `/beegfs/a474r867/sciev` |
 | Repo hermano (backbone propio) | `github.com/alrobles/ecoreasoner` · cluster `/beegfs/a474r867/ecoreasoner` |
 | Datos (cluster) | `data/sci_battery{,_v2}`, `data/bench_external/` |
-| Runs/checkpoints | `/beegfs/a474r867/reverse-jev/runs/sci/` |
+| Runs/checkpoints | `/beegfs/a474r867/sciev/runs/sci/` |
 | Notas internas (gitignored) | `runs/sci/ABLATION.md`, `runs/sci/STRATEGY.md` |
 | Paper draft | `paper/main.tex` |
 | Reporte cruzado en ecoreasoner | `docs/REVERSE-JEV-PARALLEL-WORK.md` |

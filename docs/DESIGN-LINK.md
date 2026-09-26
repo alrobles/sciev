@@ -7,7 +7,7 @@ correct continuation" thesis as "dLLM scores typed options with calibrated
 probabilities" — the System One contract that TypeSafe's Jev popularized.
 
 ecoreasoner keeps the corpus, the L0–L3 pair batteries, and the research log.
-reverse-jev keeps the decision readout, the RLCD-lite trainer, the
+sciev keeps the decision readout, the RLCD-lite trainer, the
 SDK-compatible server, and the calibration harness that compares our model
 against the real Jev API on identical questions.
 
@@ -46,7 +46,7 @@ old temperature/automation claims are reused.
 
 ### Shared implementation interfaces
 
-`reverse_jev.decisions` owns the framework-independent data contract and
+`sciev.decisions` owns the framework-independent data contract and
 R2 preprocessing:
 
 - `ENCODING_VERSION = "systemone-v2"`.
@@ -69,7 +69,7 @@ R2 preprocessing:
   layers=(-1,), canonical=False, order=None, strict=False)` returns
   `(logits_in_original_option_order, prepared)` using one backbone forward.
 
-`reverse_jev.metrics` owns validated distribution metrics and dev-fitted
+`sciev.metrics` owns validated distribution metrics and dev-fitted
 acceptance policies. Per-class/majority metrics require a fixed semantic
 label space; option positions in arbitrary QA are not semantic classes.
 Acceptance policies use maximum class probability, not the API's
@@ -78,9 +78,9 @@ risk guarantee.
 
 ### Parallel ownership
 
-- Data agent: dataset builders/converters, `reverse_jev/data.py`, and their tests.
-- Metrics agent: `reverse_jev/metrics.py` and its tests.
-- API agent: `reverse_jev/inference.py`, `reverse_jev/serve.py`, and their tests.
+- Data agent: dataset builders/converters, `sciev/data.py`, and their tests.
+- Metrics agent: `sciev/metrics.py` and its tests.
+- API agent: `sciev/inference.py`, `sciev/serve.py`, and their tests.
 - Coordinator: shared decisions, training/evaluation integration, experiment
   scripts, documentation, and cross-component verification.
 
@@ -92,25 +92,25 @@ release changes are delegated to subagents. Integration is performed on
 
 Implemented on this branch (software contracts only; no new accuracy claims):
 
-- `reverse_jev.protocol`: matched `scientific-v1` recipe per decision type,
+- `sciev.protocol`: matched `scientific-v1` recipe per decision type,
   dataset identity contracts (exact input, declared source/document/group
   provenance), disjointness assertions between calibration/evaluation/training
   roles, checkpoint-vs-data overlap checks (`unverified` when a legacy
   checkpoint lacks recorded training identities), and fresh-output guards.
-- `reverse_jev.calibration`: dev-only temperature and acceptance-policy
+- `sciev.calibration`: dev-only temperature and acceptance-policy
   fitting through the shared decision path, frozen JSON artifacts bound to
   the checkpoint SHA-256, load-time validation of evaluation/calibration
   disjointness and expected inference settings. Legacy checkpoints report
   training provenance as `unverified` rather than passing silently.
-- `reverse_jev.train`/`eval`: `--recipe scientific-v1`, per-row strict-input
+- `sciev.train`/`eval`: `--recipe scientific-v1`, per-row strict-input
   handling for `systemone-v2`, self-describing checkpoints (`inference`
   settings, `training_data` contract, input file fingerprints), final
   partial-accumulation optimizer step, dev/eval identity-overlap checks,
   `--calibration-in`, `--train-reference`, `--decision-type`, `--fixed-labels`.
-- `reverse_jev.inference`/`serve`: manifest-based R2 engine over the shared
+- `sciev.inference`/`serve`: manifest-based R2 engine over the shared
   encoding; explicit legacy opt-in for historical bundles; API/local parity
   including canonical tie selection and maximum-probability policies.
-- `reverse_jev.data` and builders: split-local negative pools, connected
+- `sciev.data` and builders: split-local negative pools, connected
   group splitting, NFC-preserving content identity (case and compatibility
   symbols are scientifically significant), Decimal numeric handling,
   explicit evidence spans, and `make_evidence_controls` producing

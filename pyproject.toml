@@ -1,6 +1,6 @@
 [project]
-name = "reverse-jev"
-version = "0.1.1"
+name = "sciev"
+version = "0.2.0"
 description = "Sciev: typed decision heads on frozen masked-diffusion backbones with held-out calibration."
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -20,4 +20,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["reverse_jev"]
+packages = ["sciev"]

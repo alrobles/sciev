@@ -7,10 +7,10 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:pro6000:1
 #SBATCH --mem=60G
-#SBATCH --output=/beegfs/a474r867/reverse-jev/logs/e0_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/logs/e0_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/logs/e0_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/logs/e0_%j.err
 # =============================================================================
-# E0 — readout swap sin entrenar (gate test-and-drop de la linea reverse-jev):
+# E0 — readout swap sin entrenar (gate test-and-drop de la linea sciev):
 # para cada par (ctx/ok/bad) compara dos scorers sobre el MISMO checkpoint:
 #   r1_first_token : ctx + [MASK] -> logit[ok[0]] vs logit[bad[0]]  (Jev-style)
 #   legacy_denoise : denoise_loss(ctx+ok) < denoise_loss(ctx+bad)   (Fase-3)
@@ -18,7 +18,7 @@
 # =============================================================================
 set -euo pipefail
 BASE=/beegfs/a474r867/ecoreasoner
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 SIF=$BASE/pytorch-cuda.sif
 OVL=$BASE/blackwell-torch.overlay
 PY=/bb/bwvenv/bin/python
@@ -42,7 +42,7 @@ for PAIRS in pairs_hard_v4_holdout_clean pairs_hard_v3_eval; do
         [ -z "$tag" ] && continue
         echo "--- $tag vs $PAIRS ---"
         apptainer exec --nv --overlay "$OVL":ro "$SIF" \
-            "$PY" -m reverse_jev.eval \
+            "$PY" -m sciev.eval \
             --ckpt "$ckpt" --config "$cfg" \
             --pairs-dir "$RUNS/$PAIRS" \
             --device cuda \

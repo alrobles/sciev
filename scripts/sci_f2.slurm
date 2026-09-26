@@ -5,11 +5,11 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=05:30:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 ECO=/beegfs/a474r867/ecoreasoner
 BAT=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
@@ -33,7 +33,7 @@ cat "$BAT"/sci_choice_dev.jsonl \
 run() { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
 
 echo "=== TRAIN sci spanpool ft (f2-50k init) ==="
-run -m reverse_jev.train \
+run -m sciev.train \
     --decisions-train "$BAT/sci_all_train.jsonl" \
     --ckpt "$CKPT" --config "$CFG" \
     --r2-mode spanpool --steps 8000 --accum 1 \
@@ -42,7 +42,7 @@ run -m reverse_jev.train \
 
 for KIND in choice noul score; do
     echo "=== EVAL $KIND (sci_sp_ft) ==="
-    run -m reverse_jev.eval \
+    run -m sciev.eval \
         --ckpt "$RUNS/sci_sp_ft/decision.pt" --config "$CFG" \
         --r2-mode spanpool \
         --r2-temp-fit-decisions "$BAT/sci_all_dev.jsonl" \

@@ -35,7 +35,7 @@ from decimal import Decimal, localcontext
 from itertools import chain
 from pathlib import Path
 
-from reverse_jev.data import (
+from sciev.data import (
     add_decision, content_fingerprint, exclude_record, group_records,
     input_fingerprints, normalized_content, partition_groups, read_jsonl,
     record_metadata, write_dataset,

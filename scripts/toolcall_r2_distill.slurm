@@ -5,11 +5,11 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=05:30:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/toolcall/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/toolcall/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/toolcall/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/toolcall/%x_%j.err
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 ECO=/beegfs/a474r867/ecoreasoner
 BAT=$RJ/data/toolcall_battery
 RUNS=$RJ/runs/toolcall
@@ -33,7 +33,7 @@ cat "$BAT"/toolcall_choice_dev.jsonl \
 run() { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
 
 echo "=== TRAIN toolcall spanpool ft + OLMo-13B soft labels ==="
-run -m reverse_jev.train \
+run -m sciev.train \
     --decisions-train "$BAT/toolcall_all_train.jsonl" \
     --soft-labels "$RUNS/soft_train.jsonl" --soft-weight 0.4 --soft-temp 2.0 \
     --ckpt "$CKPT" --config "$CFG" \
@@ -43,7 +43,7 @@ run -m reverse_jev.train \
 
 for KIND in choice noul score; do
     echo "=== EVAL $KIND (tc_sp_distill) ==="
-    run -m reverse_jev.eval \
+    run -m sciev.eval \
         --ckpt "$RUNS/tc_sp_distill/decision.pt" --config "$CFG" \
         --r2-mode spanpool \
         --r2-temp-fit-decisions "$BAT/toolcall_all_dev.jsonl" \

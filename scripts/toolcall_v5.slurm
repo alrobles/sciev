@@ -5,15 +5,15 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=05:30:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/toolcall/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/toolcall/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/toolcall/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/toolcall/%x_%j.err
 #
 # Spanpool-FT on the tool-call battery initialized from the v5-1b
 # backbone (MoE 768/12L/12H/16E top-1, ~1.13B) — the capacity test.
 # Submit with:  sbatch --dependency=afterany:<v5-1b jobids> scripts/toolcall_v5.slurm
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 ECO=/beegfs/a474r867/ecoreasoner
 BAT=$RJ/data/toolcall_battery
 RUNS=$RJ/runs/toolcall
@@ -39,7 +39,7 @@ echo "=== v5-1b checkpoint: $CKPT ==="
 run() { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
 
 echo "=== TRAIN toolcall spanpool ft (v5-1b init) ==="
-run -m reverse_jev.train \
+run -m sciev.train \
     --decisions-train "$BAT/toolcall_all_train.jsonl" \
     --ckpt "$CKPT" --config "$CFG" \
     --r2-mode spanpool --steps 8000 --accum 1 \
@@ -48,7 +48,7 @@ run -m reverse_jev.train \
 
 for KIND in choice noul score; do
     echo "=== EVAL $KIND (tc_v5_sp) ==="
-    run -m reverse_jev.eval \
+    run -m sciev.eval \
         --ckpt "$RUNS/tc_v5_sp/decision.pt" --config "$CFG" \
         --r2-mode spanpool \
         --r2-temp-fit-decisions "$BAT/toolcall_all_dev.jsonl" \
@@ -57,7 +57,7 @@ for KIND in choice noul score; do
 done
 
 echo "=== EVAL pairs v4 holdout (comparability with 155M) ==="
-run -m reverse_jev.eval \
+run -m sciev.eval \
     --ckpt "$RUNS/tc_v5_sp/decision.pt" --config "$CFG" \
     --r2-mode spanpool \
     --pairs-dir "$ECO/runs/pairs_hard_v4_holdout_clean" \

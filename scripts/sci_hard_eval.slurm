@@ -5,15 +5,15 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=01:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Hard-distractor choice evals + evidence controls for one matched arm:
 #   sbatch --export=ALL,ARM=fr_matched_s7331,DAPT=none sci_hard_eval.slurm
 #   sbatch --export=ALL,ARM=da_matched_s7331,DAPT=$PWD/runs/dapt/lora-final sci_hard_eval.slurm
 
 set -euo pipefail
-RJ=${RJ:-/beegfs/a474r867/reverse-jev}
+RJ=${RJ:-/beegfs/a474r867/sciev}
 BAT=${BAT:-$RJ/data/sci_battery/systemone-v2}
 HARD=${HARD:-$RJ/data/sci_battery_hard/systemone-v2}
 HCTL=${HCTL:-$RJ/data/sci_controls_hard/systemone-v2}
@@ -34,7 +34,7 @@ run_eval () {  # evalfile out
     local dst="$RUNS/eval_${out}.json"
     if [ -e "$dst" ]; then echo "skip existing $dst"; return; fi
     echo "=== EVAL $out ==="
-    "$PY" -m reverse_jev.eval \
+    "$PY" -m sciev.eval \
         --ckpt "$RUNS/${ARM}_choice/decision.pt" \
         --decision-type choice --seed "$SEED" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \

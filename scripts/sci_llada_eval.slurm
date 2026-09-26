@@ -5,14 +5,14 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Evals-only resume for sci_llada (both decision.pt already trained;
 # job died on a bf16/fp32 dtype bug in eval_decisions_ids — now fixed).
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 BAT=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
 PY=/beegfs/a474r867/bioai/venv/bin/python
@@ -28,7 +28,7 @@ cat "$BAT"/sci_choice_dev.jsonl \
 for TAG in sci_llada_freeze sci_llada_ft; do
     for KIND in choice noul score; do
         echo "=== EVAL $KIND ($TAG) ==="
-        $PY -m reverse_jev.eval \
+        $PY -m sciev.eval \
             --ckpt "$RUNS/$TAG/decision.pt" \
             --r2-mode spanpool \
             --r2-temp-fit-decisions "$BAT/sci_all_dev.jsonl" \

@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from reverse_jev.model import AttnPoolHead, DecisionHead, MdLMMoE
+from sciev.model import AttnPoolHead, DecisionHead, MdLMMoE
 
 
 class FakeTokenizer:
@@ -37,7 +37,7 @@ class TinyBackbone(MdLMMoE):
 
 
 def make_engine(**kwargs):
-    from reverse_jev.inference import DecisionEngine, HeadSettings
+    from sciev.inference import DecisionEngine, HeadSettings
 
     torch.manual_seed(41)
     backbone = kwargs.pop("backbone", TinyBackbone())
@@ -222,7 +222,7 @@ def test_indistinguishable_tokenized_options_rejected():
     {"head_kind": "attnpool", "mode": "marker"},
 ])
 def test_invalid_head_settings(settings):
-    from reverse_jev.inference import HeadSettings
+    from sciev.inference import HeadSettings
 
     with pytest.raises(ValueError):
         HeadSettings(**settings)
@@ -256,7 +256,7 @@ def test_serialized_access_to_shared_backbone():
 
 @pytest.fixture
 def bundle(tmp_path):
-    from reverse_jev.inference import HeadSettings
+    from sciev.inference import HeadSettings
 
     torch.manual_seed(12)
     specs = {
@@ -294,7 +294,7 @@ def bundle(tmp_path):
 
 
 def test_manifest_one_backbone_strict_heads_weights_only_cpu(bundle, monkeypatch):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, _ = bundle
     factory = Mock(side_effect=lambda *args, **kwargs: TinyBackbone(seq_len=kwargs["seq_len"]))
@@ -329,7 +329,7 @@ def test_manifest_one_backbone_strict_heads_weights_only_cpu(bundle, monkeypatch
 
 
 def test_all_hashes_checked_before_deserialization_or_model_load(bundle, monkeypatch):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, _, save, _ = bundle
     manifest["heads"]["score"]["sha256"] = "0" * 64
@@ -356,7 +356,7 @@ def test_all_hashes_checked_before_deserialization_or_model_load(bundle, monkeyp
     {"encoding": "old-encoding"},
 ])
 def test_checkpoint_bundle_mismatches_rejected_before_backbone(bundle, change):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     _, checkpoints, save, replace = bundle
     replace("noul", {**checkpoints["noul"], **change})
@@ -367,7 +367,7 @@ def test_checkpoint_bundle_mismatches_rejected_before_backbone(bundle, change):
 
 
 def test_missing_checkpoint_adapter_rejected_when_bundle_declares_one(bundle):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, _, save, _ = bundle
     manifest["lora_adapter"] = "expected-adapter"
@@ -379,7 +379,7 @@ def test_missing_checkpoint_adapter_rejected_when_bundle_declares_one(bundle):
 
 @pytest.mark.parametrize("corrupt", ["missing", "extra", "nonfinite"])
 def test_head_state_is_strict_and_finite_before_backbone(bundle, corrupt):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     _, checkpoints, save, replace = bundle
     checkpoint = checkpoints["score"]
@@ -398,7 +398,7 @@ def test_head_state_is_strict_and_finite_before_backbone(bundle, corrupt):
 
 @pytest.mark.parametrize("encoding", [None, "legacy-v1"])
 def test_legacy_encoding_requires_opt_in_and_is_visibly_unverified(bundle, encoding):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, _, save, _ = bundle
     if encoding is None:
@@ -455,7 +455,7 @@ def test_original_name_mapping_with_known_presented_logits():
 
 
 def test_marker_settings_invoke_real_head_and_count_marker_tokens():
-    from reverse_jev.decisions import encode_question
+    from sciev.decisions import encode_question
 
     engine = make_engine(heads={"choice": DecisionHead(8)},
                          settings={"choice": {"mode": "marker"}})
@@ -469,7 +469,7 @@ def test_marker_settings_invoke_real_head_and_count_marker_tokens():
 
 
 def test_shared_adapter_paths_are_resolved_against_manifest_parent(bundle):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, replace = bundle
     manifest["lora_adapter"] = "adapters/shared"
@@ -483,7 +483,7 @@ def test_shared_adapter_paths_are_resolved_against_manifest_parent(bundle):
 
 @pytest.mark.parametrize("checksum", [None, "", "not-a-hash", "0" * 63, 42])
 def test_supplied_checksums_must_be_valid_sha256(bundle, checksum):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, _, save, _ = bundle
     manifest["heads"]["choice"]["sha256"] = checksum
@@ -532,7 +532,7 @@ def test_nonfinite_head_output_is_model_failure_not_probabilities():
 @pytest.mark.parametrize("encoding", [None, "legacy-v1"])
 @pytest.mark.parametrize("explicit_inference", [False, True])
 def test_released_legacy_mlp_requested_layers_need_explicit_opt_in(bundle, encoding, explicit_inference):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, replace = bundle
     if encoding is None:
@@ -572,7 +572,7 @@ def test_released_legacy_mlp_requested_layers_need_explicit_opt_in(bundle, encod
     ("noul", "systemone-v2"), ("score", "systemone-v2"),
 ])
 def test_legacy_opt_in_does_not_relax_attnpool_or_modern_layer_counts(bundle, kind, encoding):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, replace = bundle
     if encoding is None:
@@ -599,7 +599,7 @@ def test_legacy_opt_in_does_not_relax_attnpool_or_modern_layer_counts(bundle, ki
     {"layers": [-1, -2]},
 ])
 def test_legacy_mlp_compatibility_does_not_ignore_explicit_inference_settings(bundle, change):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, replace = bundle
     manifest.pop("encoding")
@@ -614,7 +614,7 @@ def test_legacy_mlp_compatibility_does_not_ignore_explicit_inference_settings(bu
 
 @pytest.mark.parametrize("count", [0, True, "4"])
 def test_legacy_mlp_requested_layer_count_must_still_be_a_positive_integer(bundle, count):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, replace = bundle
     manifest.pop("encoding")
@@ -628,7 +628,7 @@ def test_legacy_mlp_requested_layer_count_must_still_be_a_positive_integer(bundl
 
 
 def test_legacy_mlp_compatibility_still_strictly_validates_actual_head_state(bundle):
-    from reverse_jev.inference import DecisionEngine
+    from sciev.inference import DecisionEngine
 
     manifest, checkpoints, save, replace = bundle
     manifest.pop("encoding")
@@ -644,7 +644,7 @@ def test_legacy_mlp_compatibility_still_strictly_validates_actual_head_state(bun
 
 
 def test_r2_uses_shared_probabilities_for_every_specialist_head(monkeypatch):
-    from reverse_jev import decisions
+    from sciev import decisions
 
     shared = Mock(wraps=decisions.decision_probabilities)
     monkeypatch.setattr(decisions, "decision_probabilities", shared)

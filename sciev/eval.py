@@ -1,15 +1,15 @@
-"""reverse_jev.eval — decision evaluation harness.
+"""sciev.eval — decision evaluation harness.
 
 Modes:
   E0 pairs  : --pairs pairs_L3.jsonl   (ecoreasoner ids; R1 vs denoise_loss)
   decisions : --data decisions.jsonl   (System-One labels; acc/Brier/ECE)
   remote    : --remote URL             (same decisions against any
-              /v1/systemone endpoint — Jev API or a local reverse-jev server)
+              /v1/systemone endpoint — Jev API or a local sciev server)
 
 Examples:
-  python -m reverse_jev.eval --ckpt runs/f0/checkpoint-g10000/model.pt \
+  python -m sciev.eval --ckpt runs/f0/checkpoint-g10000/model.pt \
       --pairs /beegfs/.../pairs_L3.jsonl --tokenizer GSAI-ML/LLaDA-8B-Instruct
-  python -m reverse_jev.eval --remote https://api.typesafe.ai \
+  python -m sciev.eval --remote https://api.typesafe.ai \
       --api-key-file ~/env/typesafe-key --data evals/eco_decisions.jsonl
 """
 import argparse

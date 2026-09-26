@@ -7,8 +7,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from reverse_jev.model import MdLMMoE, load_backbone
-from reverse_jev import readout, eval as rj_eval
+from sciev.model import MdLMMoE, load_backbone
+from sciev import readout, eval as rj_eval
 
 
 class FakeTok:
@@ -68,7 +68,7 @@ def test_pairs_eval_runs():
 def test_r2_marker_learnable():
     """A learnable DecisionHead can separate a planted signal: options whose
     tokens are all >50 are 'correct'. Proves train->eval plumbing works."""
-    from reverse_jev.model import DecisionHead, marker_layout, load_decision
+    from sciev.model import DecisionHead, marker_layout, load_decision
     import tempfile, random
     model = tiny_model()
     head = DecisionHead(32)
@@ -109,9 +109,9 @@ def test_r2_marker_learnable():
 def test_r2_kway_decisions():
     """K-way path: train_r2 on {ctx, opts[K], gold} -> eval_decisions_ids."""
     from types import SimpleNamespace
-    from reverse_jev.model import DecisionHead
-    from reverse_jev.train import train_r2
-    from reverse_jev.data import load_decisions_ids
+    from sciev.model import DecisionHead
+    from sciev.train import train_r2
+    from sciev.data import load_decisions_ids
     import tempfile
     model = tiny_model()
     head = DecisionHead(32)
@@ -154,7 +154,7 @@ def test_r2_flip_tracks_option_identity():
     def score_options(model, head, ids, mode, bounds, layers):
         return torch.stack([ids[start].float() for start, _ in bounds])
 
-    with patch("reverse_jev.model.forward_feats", side_effect=score_options):
+    with patch("sciev.model.forward_feats", side_effect=score_options):
         for canonical in (False, True):
             out = rj_eval.eval_decisions_ids(
                 tiny_model(), None, rows, "cpu", mode="spanpool",
@@ -168,7 +168,7 @@ def test_r2_flip_detects_positional_bias():
 
     rows = [{"ctx": [1], "opts": [[10], [20], [30], [40]], "gold": 0}
             for _ in range(20)]
-    with patch("reverse_jev.model.forward_feats",
+    with patch("sciev.model.forward_feats",
                return_value=torch.tensor([4.0, 3.0, 2.0, 1.0])):
         out = rj_eval.eval_decisions_ids(
             tiny_model(), None, rows, "cpu", mode="spanpool")

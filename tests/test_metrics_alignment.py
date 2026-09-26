@@ -7,7 +7,7 @@ from itertools import permutations
 import numpy as np
 import pytest
 
-from reverse_jev.metrics import (
+from sciev.metrics import (
     classification_metrics,
     evaluate_acceptance_policy,
     fit_acceptance_policy,

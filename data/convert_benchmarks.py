@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert public benchmarks into reverse-jev decision rows.
+"""Convert public benchmarks into sciev decision rows.
 
 Outputs the same {ctx:[ids], opts:[[ids]...], gold, kind, qid} format as
 build_sci_decisions.py, plus a text row file for --remote eval.
@@ -26,7 +26,7 @@ import json
 import random
 from pathlib import Path
 
-from reverse_jev.data import (
+from sciev.data import (
     add_decision, content_fingerprint, exclude_record, group_records,
     input_fingerprints, normalized_content, read_jsonl, record_metadata,
     write_dataset,

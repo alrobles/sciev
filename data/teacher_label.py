@@ -7,7 +7,7 @@ the first-token logprobs -> a distribution over options ("soft" labels).
 
 Output jsonl: {"qid", "kind", "gold", "soft":[p...], "teacher_argmax",
                "letter_mass"}
-joined to id-rows by qid via --soft-labels in reverse_jev.train.
+joined to id-rows by qid via --soft-labels in sciev.train.
 
 Usage (in apptainer on a GPU node):
   python data/teacher_label.py \
@@ -24,7 +24,7 @@ LETTERS = string.ascii_uppercase  # A..Z
 
 def render_prompt(state, q):
     """state + question -> lettered-option chat prompt."""
-    from reverse_jev.decisions import render_value
+    from sciev.decisions import render_value
 
     qt = q["type"]
     if qt == "choice":

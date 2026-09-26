@@ -5,10 +5,10 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from reverse_jev.decisions import prepare_decision
-from reverse_jev.eval import eval_decisions_ids, fit_r2_temperature_decisions
-from reverse_jev.model import MdLMMoE, load_backbone
-from reverse_jev.train import _r2_example, train_r2
+from sciev.decisions import prepare_decision
+from sciev.eval import eval_decisions_ids, fit_r2_temperature_decisions
+from sciev.model import MdLMMoE, load_backbone
+from sciev.train import _r2_example, train_r2
 
 
 def stub(seq_len=12, mask_id=63):
@@ -36,7 +36,7 @@ def test_training_does_not_clamp_valid_special_tokens():
 
 def test_calibration_rejects_truncated_option_collisions():
     rows = [{"ctx": [9, 10], "opts": [[1, 2, 3, 4], [1, 2, 3, 5]], "gold": 0}]
-    with patch("reverse_jev.model.forward_feats", return_value=torch.tensor([1.0, 2.0])):
+    with patch("sciev.model.forward_feats", return_value=torch.tensor([1.0, 2.0])):
         with pytest.raises(ValueError, match="distinct|identical|indistinguishable"):
             fit_r2_temperature_decisions(stub(seq_len=8), None, rows, "cpu", canonical=True)
 
@@ -48,7 +48,7 @@ def test_evaluation_supports_variable_option_counts():
     def score(model, head, ids, mode, bounds, layers):
         return torch.stack([ids[start].float() for start, _ in bounds])
 
-    with patch("reverse_jev.model.forward_feats", side_effect=score):
+    with patch("sciev.model.forward_feats", side_effect=score):
         report = eval_decisions_ids(stub(), None, rows, "cpu", canonical=True)
     assert report["n"] == 2
     assert report["acc"] == 1.0
@@ -73,7 +73,7 @@ def test_native_checkpoint_uses_saved_architecture(tmp_path):
 
 
 def test_recipe_applies_matched_settings():
-    from reverse_jev.train import apply_scientific_recipe
+    from sciev.train import apply_scientific_recipe
     args = SimpleNamespace(recipe="scientific-v1", decision_type="choice")
     apply_scientific_recipe(args)
     assert (args.freeze, args.r2_mode, args.canonical_order,
@@ -88,9 +88,9 @@ def test_recipe_applies_matched_settings():
 
 
 def test_checkpoint_records_inference_and_training_contract(tmp_path):
-    from reverse_jev.decisions import ENCODING_VERSION
-    from reverse_jev.model import DecisionHead
-    from reverse_jev.train import r2_checkpoint
+    from sciev.decisions import ENCODING_VERSION
+    from sciev.model import DecisionHead
+    from sciev.train import r2_checkpoint
     data = tmp_path / "train.jsonl"
     data.write_text('{"ctx":[1],"opts":[[2],[3]],"gold":0}\n')
     examples = [{"ctx": [1], "opts": [[2], [3]], "gold": 0,
@@ -116,10 +116,10 @@ def test_checkpoint_records_inference_and_training_contract(tmp_path):
 
 
 def test_checkpoint_disjointness_uses_recorded_training_data(tmp_path):
-    from reverse_jev.decisions import ENCODING_VERSION
-    from reverse_jev.model import DecisionHead
-    from reverse_jev.protocol import assert_checkpoint_disjoint
-    from reverse_jev.train import r2_checkpoint
+    from sciev.decisions import ENCODING_VERSION
+    from sciev.model import DecisionHead
+    from sciev.protocol import assert_checkpoint_disjoint
+    from sciev.train import r2_checkpoint
     model = MdLMMoE(vocab=32, hidden=8, layers=1, heads=2, ff_mult=2,
                     seq_len=32, n_experts=1, k=1)
     train_row = {"ctx": [1], "opts": [[2], [3]], "gold": 0, "qid": "t1",
@@ -138,7 +138,7 @@ def test_checkpoint_disjointness_uses_recorded_training_data(tmp_path):
 
 
 def test_partial_gradient_accumulation_is_not_dropped():
-    from reverse_jev.model import DecisionHead
+    from sciev.model import DecisionHead
 
     torch.manual_seed(4)
     model = MdLMMoE(vocab=32, hidden=8, layers=1, heads=2, ff_mult=2,

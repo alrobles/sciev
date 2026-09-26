@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:30:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Resume DAPT from lora-g2000 (job dapt_llada hit sixhour limit at ~3100/6000).
 # Runs steps 2001..5000 (~4.8h at 5.7s/it) -> runs/dapt/lora-final.
@@ -14,7 +14,7 @@
 # 5000 total (~82M tokens) is the release adapter.
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 RUNS=$RJ/runs
 DATA=/beegfs/a474r867/ecoreasoner/data
 PY=/beegfs/a474r867/bioai/venv/bin/python
@@ -36,7 +36,7 @@ if [ ! -f "$RUNS/dapt/lora-g2000/adapter_config.json" ]; then
     echo "missing lora-g2000 — nothing to resume from"; exit 1
 fi
 
-$PY -m reverse_jev.dapt \
+$PY -m sciev.dapt \
     --hf-backbone GSAI-ML/LLaDA-8B-Instruct \
     --corpus "$DATA/corpus_v4_en.jsonl" \
     --corpus "$DATA/corpus_v4hneg.jsonl" \

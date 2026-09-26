@@ -7,11 +7,11 @@
 #SBATCH --gres=gpu:pro6000:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
-#SBATCH --output=/beegfs/a474r867/reverse-jev/logs/r2cal_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/logs/r2cal_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/logs/r2cal_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/logs/r2cal_%j.err
 set -euo pipefail
 BASE=/beegfs/a474r867/ecoreasoner
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 SIF=$BASE/pytorch-cuda.sif
 OVL=$BASE/blackwell-torch.overlay
 PY=/bb/bwvenv/bin/python
@@ -26,7 +26,7 @@ export PYTHONPATH=$RJ
 run () { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
 
 # --- RCDL-lite: f2-50k + spanpool + FT + REINFORCE scoring rule ---
-run -m reverse_jev.train --pairs-train $TRAIN \
+run -m sciev.train --pairs-train $TRAIN \
     --ckpt $RUNS/f2-spanes/checkpoint-g50000/model.pt \
     --config $CFG \
     --out $RJ/runs/r2/f2_sp_ft_rl --steps 8000 --accum 8 --lr 2e-5 \
@@ -36,10 +36,10 @@ run -m reverse_jev.train --pairs-train $TRAIN \
 for TAG in f2_sp_ft f2_sp_ft_rl; do
   CKPT=$RJ/runs/r2/$TAG/decision.pt
   for BAT in pairs_hard_v3_eval pairs_hard_v4_holdout_clean; do
-    run -m reverse_jev.eval --ckpt $CKPT --config $CFG \
+    run -m sciev.eval --ckpt $CKPT --config $CFG \
         --pairs-dir $RUNS/$BAT --device cuda --r2-mode spanpool \
         --out $RJ/runs/r2/${TAG}__${BAT}__raw.json
-    run -m reverse_jev.eval --ckpt $CKPT --config $CFG \
+    run -m sciev.eval --ckpt $CKPT --config $CFG \
         --pairs-dir $RUNS/$BAT --device cuda --r2-mode spanpool \
         --r2-temp-fit $DEV \
         --out $RJ/runs/r2/${TAG}__${BAT}__temp.json

@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=02:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Evidence-control evals for one matched arm:
 #   sbatch --export=ALL,ARM=fr_matched_s7331,DAPT=none sci_controls.slurm
@@ -15,7 +15,7 @@
 # Controls score agreement-with-reference, NOT accuracy on altered evidence.
 
 set -euo pipefail
-RJ=${RJ:-/beegfs/a474r867/reverse-jev}
+RJ=${RJ:-/beegfs/a474r867/sciev}
 BAT=${BAT:-$RJ/data/sci_battery/systemone-v2}
 CTL=${CTL:-$RJ/data/sci_controls/systemone-v2}
 RUNS=${RUNS:-$RJ/runs/sci}
@@ -44,7 +44,7 @@ eval_ctl () {  # kind mode
     local out="$RUNS/eval_${ARM}_${kind}_ctl_${mode}.json"
     if [ -e "$out" ]; then echo "skip existing $out"; return; fi
     echo "=== EVAL ${ARM}_${kind}_ctl_${mode} ==="
-    "$PY" -m reverse_jev.eval \
+    "$PY" -m sciev.eval \
         --ckpt "$RUNS/${ARM}_${kind}/decision.pt" \
         --decision-type "$kind" --seed "$SEED" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \

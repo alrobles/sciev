@@ -114,7 +114,7 @@ no adapter. Table 4 reports the candidates and their limitations:
 ## Reproduce
 
 ```bash
-python -m reverse_jev.eval --ckpt release/sciev-0.1-choice.pt \
+python -m sciev.eval --ckpt release/sciev-0.1-choice.pt \
     --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
     --r2-temp 0.8274 \
     --decisions-eval my_decisions.jsonl --device cuda --out eval.json

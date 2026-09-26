@@ -12,7 +12,7 @@ from test_inference import FakeTokenizer, all_questions, make_engine
 
 @pytest.mark.parametrize("configured", [False, True])
 def test_import_never_loads_models_or_tokenizers(monkeypatch, configured):
-    from reverse_jev import inference, model
+    from sciev import inference, model
     from transformers import AutoTokenizer
 
     loader = Mock(side_effect=AssertionError("import must not load a model"))
@@ -26,18 +26,18 @@ def test_import_never_loads_models_or_tokenizers(monkeypatch, configured):
             monkeypatch.setenv(key, "/private/not-a-real-checkpoint")
         else:
             monkeypatch.delenv(key, raising=False)
-    if "reverse_jev.serve" in sys.modules:
-        module = importlib.reload(sys.modules["reverse_jev.serve"])
+    if "sciev.serve" in sys.modules:
+        module = importlib.reload(sys.modules["sciev.serve"])
     else:
-        module = importlib.import_module("reverse_jev.serve")
+        module = importlib.import_module("sciev.serve")
     assert module.app is not None
     assert callable(module.create_app)
     loader.assert_not_called()
 
 
 def test_injected_api_all_types_metadata_and_usage(monkeypatch):
-    from reverse_jev.serve import create_app
-    from reverse_jev import readout
+    from sciev.serve import create_app
+    from sciev import readout
 
     monkeypatch.setenv("SCIEV_MANIFEST", "/private/invalid-manifest.json")
     monkeypatch.setattr(readout, "answer_questions", Mock(side_effect=AssertionError("R2 must not use R1")))
@@ -68,7 +68,7 @@ def test_injected_api_all_types_metadata_and_usage(monkeypatch):
 
 
 def test_ids_and_labels_are_ignored_by_api_features():
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     engine = make_engine()
     question = {"type": "choice", "instructions": ["select"],
@@ -100,7 +100,7 @@ def test_ids_and_labels_are_ignored_by_api_features():
     {"state": "facts", "questions": {"valid": {"type": "noul", "instructions": "verify facts"}, "invalid": {"type": "score", "criteria": []}}},
 ])
 def test_public_schema_rejects_invalid_inputs_without_inference(payload):
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     engine = make_engine()
     with TestClient(create_app(engine)) as client:
@@ -110,7 +110,7 @@ def test_public_schema_rejects_invalid_inputs_without_inference(payload):
 
 
 def test_oversize_encoder_input_is_clear_4xx_not_truncation():
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     engine = make_engine(max_ctx=12)
     with TestClient(create_app(engine)) as client:
@@ -122,8 +122,8 @@ def test_oversize_encoder_input_is_clear_4xx_not_truncation():
 
 
 def test_unknown_model_and_missing_head_are_clear_4xx():
-    from reverse_jev.serve import create_app
-    from reverse_jev.model import DecisionHead
+    from sciev.serve import create_app
+    from sciev.model import DecisionHead
 
     engine = make_engine(heads={"noul": DecisionHead(8)}, settings={"noul": {}})
     with TestClient(create_app(engine)) as client:
@@ -139,7 +139,7 @@ def test_unknown_model_and_missing_head_are_clear_4xx():
 
 
 def test_no_configuration_is_503_without_load_and_warns_local_only(monkeypatch, caplog):
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     monkeypatch.delenv("SCIEV_MANIFEST", raising=False)
     monkeypatch.delenv("REVJEV_CKPT", raising=False)
@@ -151,9 +151,9 @@ def test_no_configuration_is_503_without_load_and_warns_local_only(monkeypatch, 
 
 
 def test_bad_r2_configuration_does_not_fall_back_to_legacy(monkeypatch):
-    from reverse_jev.serve import create_app
-    from reverse_jev.inference import DecisionEngine
-    from reverse_jev import model
+    from sciev.serve import create_app
+    from sciev.inference import DecisionEngine
+    from sciev import model
 
     monkeypatch.setenv("SCIEV_MANIFEST", "/private/broken-bundle.json")
     monkeypatch.setenv("REVJEV_CKPT", "/private/legacy-checkpoint.pt")
@@ -172,8 +172,8 @@ def test_bad_r2_configuration_does_not_fall_back_to_legacy(monkeypatch):
 
 
 def test_lazy_manifest_load_once_and_explicit_encoding_env(monkeypatch):
-    from reverse_jev.serve import create_app
-    from reverse_jev.inference import DecisionEngine
+    from sciev.serve import create_app
+    from sciev.inference import DecisionEngine
 
     engine = make_engine()
     loader = Mock(return_value=engine)
@@ -191,7 +191,7 @@ def test_lazy_manifest_load_once_and_explicit_encoding_env(monkeypatch):
 
 
 def test_model_failures_are_not_returned_as_successful_probabilities():
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     engine = make_engine()
     engine.backbone.forward = Mock(side_effect=RuntimeError("failed device kernel"))
@@ -202,7 +202,7 @@ def test_model_failures_are_not_returned_as_successful_probabilities():
 
 
 def test_openapi_has_discriminated_public_question_schema():
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     schema = create_app(make_engine()).openapi()
     rendered = json.dumps(schema)
@@ -219,7 +219,7 @@ def test_openapi_has_discriminated_public_question_schema():
 ])
 def test_public_schema_rejects_scalar_descriptors(question_type, criteria):
     from pydantic import ValidationError
-    from reverse_jev.serve import SystemOneRequest
+    from sciev.serve import SystemOneRequest
 
     with pytest.raises(ValidationError):
         SystemOneRequest(state="facts", questions={
@@ -228,7 +228,7 @@ def test_public_schema_rejects_scalar_descriptors(question_type, criteria):
 
 
 def test_legacy_encoding_status_is_visible_on_both_endpoints():
-    from reverse_jev.serve import create_app
+    from sciev.serve import create_app
 
     engine = make_engine(bundle_encoding=None, allow_legacy_encoding=True)
     with TestClient(create_app(engine)) as client:
@@ -243,8 +243,8 @@ def test_legacy_encoding_status_is_visible_on_both_endpoints():
 
 
 def test_explicit_r1_legacy_path_is_marked_and_usage_is_real(monkeypatch, caplog):
-    from reverse_jev.serve import create_app
-    from reverse_jev import model
+    from sciev.serve import create_app
+    from sciev import model
     from transformers import AutoTokenizer
     from test_inference import TinyBackbone
 
@@ -273,8 +273,8 @@ def test_explicit_r1_legacy_path_is_marked_and_usage_is_real(monkeypatch, caplog
 
 @pytest.mark.parametrize("uniform", [False, True])
 def test_api_exactly_matches_shared_posterior_and_token_order_selection(monkeypatch, uniform):
-    from reverse_jev import decisions
-    from reverse_jev.serve import create_app
+    from sciev import decisions
+    from sciev.serve import create_app
 
     class ReverseTokenOrder:
         def encode(self, text, add_special_tokens=False):

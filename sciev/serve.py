@@ -1,7 +1,7 @@
-"""reverse_jev.serve — /v1/systemone server compatible with the TypeSafe SDK.
+"""sciev.serve — /v1/systemone server compatible with the TypeSafe SDK.
 
   REVJEV_CKPT=runs/ckpt/model.pt REVJEV_TOKENIZER=GSAI-ML/LLaDA-8B-Instruct \
-    uvicorn reverse_jev.serve:app --port 8009
+    uvicorn sciev.serve:app --port 8009
 
 Then point the official SDK at it:
 

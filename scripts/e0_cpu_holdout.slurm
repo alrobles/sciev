@@ -6,11 +6,11 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=40G
-#SBATCH --output=/beegfs/a474r867/reverse-jev/logs/e0hold_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/logs/e0hold_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/logs/e0hold_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/logs/e0hold_%j.err
 set -euo pipefail
 BASE=/beegfs/a474r867/ecoreasoner
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 SIF=$BASE/pytorch-cuda.sif
 OVL=$BASE/blackwell-torch.overlay
 PY=/bb/bwvenv/bin/python
@@ -30,7 +30,7 @@ echo "$SPECS" | while IFS='|' read -r tag ckpt cfg; do
     [ -z "$tag" ] && continue
     echo "--- $tag vs $PAIRS ---"
     apptainer exec --overlay "$OVL":ro "$SIF" \
-        "$PY" -m reverse_jev.eval \
+        "$PY" -m sciev.eval \
         --ckpt "$ckpt" --config "$cfg" \
         --pairs-dir "$RUNS/$PAIRS" \
         --device cpu \

@@ -171,7 +171,7 @@ architecture per type, and an ordinal auxiliary weight of 1 for score.
 Thus these are candidate comparisons, not a controlled DAPT-only ablation.
 
 DAPT uses LoRA rank 16, alpha 32, dropout 0.05, and the masked-token
-objective implemented in \texttt{reverse\_jev.dapt}. With batch size 16
+objective implemented in \texttt{sciev.dapt}. With batch size 16
 and sequence cap 1{,}024, the 2{,}000/5{,}000-step adapters correspond to
 at most 32.8/81.9 million input token slots, not measured counts of unique
 non-padding tokens. The 5{,}000-step run warm-starts from the

@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:50:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Phase A: canonical option order (flip=0 by construction) + ordinal head.
 # Per-type heads on frozen LLaDA-8B, best recipe per kind:
@@ -17,7 +17,7 @@
 # Evals must pass --canonical-order to match.
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 BAT=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
 PY=/beegfs/a474r867/bioai/venv/bin/python
@@ -33,7 +33,7 @@ train() {  # tag head_kind orders steps kind extra_args...
     local TAG=$1 HK=$2 ORD=$3 STEPS=$4 KIND=$5; shift 5
     [ -f "$RUNS/$TAG/decision.pt" ] && { echo "=== SKIP $TAG (done) ==="; return; }
     echo "=== TRAIN $TAG ==="
-    $PY -m reverse_jev.train \
+    $PY -m sciev.train \
         --decisions-train "$BAT/sci_${KIND}_train.jsonl" \
         --hf-backbone "$LLADA" \
         --r2-mode spanpool --head-kind "$HK" --r2-layers="$LAYERS" \
@@ -49,7 +49,7 @@ train c_score  mlp      1 3000 score --ordinal 1.0
 
 for KIND in choice noul score; do
     echo "=== EVAL $KIND (c_$KIND) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/c_$KIND/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" \
         --canonical-order \

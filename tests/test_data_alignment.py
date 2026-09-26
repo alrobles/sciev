@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from reverse_jev.data import load_decisions_ids, split_dev_test
+from sciev.data import load_decisions_ids, split_dev_test
 
 
 def write_jsonl(path, rows):
@@ -89,8 +89,8 @@ def test_empty_context_control_is_preserved_not_silently_dropped(tmp_path):
 
 
 def test_structured_state_roundtrips_through_text_loader(tmp_path):
-    from reverse_jev.data import iter_decisions
-    from reverse_jev.decisions import encode_question
+    from sciev.data import iter_decisions
+    from sciev.decisions import encode_question
 
     class Tok:
         def encode(self, text, add_special_tokens=False):
@@ -154,7 +154,7 @@ def assert_control_reference(source, controlled, mode, source_index):
 def test_empty_evidence_control_replaces_only_explicit_span_without_mutation():
     from copy import deepcopy
     import random
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     records = [evidence_request("a", "α evidence. Question: a decoy inside evidence."),
                evidence_request("b", "Another passage with a different length.")]
@@ -181,7 +181,7 @@ def test_empty_evidence_control_replaces_only_explicit_span_without_mutation():
 def test_shuffle_evidence_controls_use_cross_group_donors_reproducibly():
     from copy import deepcopy
     import random
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     records = [evidence_request("a", "α first evidence"),
                evidence_request("a", "α first evidence", prefix="another-question"),
@@ -211,7 +211,7 @@ def test_shuffle_evidence_controls_use_cross_group_donors_reproducibly():
 @pytest.mark.parametrize("span", [None, [], [0], [0, 1, 2], "0:5", [-1, 3], [5, 1],
                                    [0, 0], [0, 100000], [True, 5], [1.0, 5], ["1", 5]])
 def test_evidence_controls_reject_invalid_explicit_offsets(span):
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     row = evidence_request("a", "source evidence")
     row["evidence_span"] = span
@@ -221,7 +221,7 @@ def test_evidence_controls_reject_invalid_explicit_offsets(span):
 
 @pytest.mark.parametrize("field", ["evidence_span", "group"])
 def test_evidence_controls_do_not_guess_missing_provenance(field):
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     row = evidence_request("a", "source evidence")
     if field == "evidence_span":
@@ -236,7 +236,7 @@ def test_evidence_controls_do_not_guess_missing_provenance(field):
 
 @pytest.mark.parametrize("group", [None, "", "  ", True, [], {}])
 def test_evidence_controls_reject_invalid_groups(group):
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     row = evidence_request("a", "source evidence")
     row["split_group"] = group
@@ -245,7 +245,7 @@ def test_evidence_controls_reject_invalid_groups(group):
 
 
 def test_evidence_controls_accept_explicit_group_id_without_split_group():
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     rows = [evidence_request("a", "first evidence"), evidence_request("b", "second evidence")]
     for i, row in enumerate(rows):
@@ -260,14 +260,14 @@ def test_evidence_controls_accept_explicit_group_id_without_split_group():
     [evidence_request("a", "first evidence"), evidence_request("a", "different evidence", prefix="second")],
     [evidence_request("a", "identical evidence"), evidence_request("b", "identical evidence")]])
 def test_shuffle_evidence_controls_fail_without_a_changed_cross_group_donor(records):
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     with pytest.raises(ValueError, match="(?i)(empty|donor|records)"):
         make_evidence_controls(records, mode="shuffle")
 
 
 def test_shuffle_evidence_controls_do_not_cross_source_splits():
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     rows = [evidence_request("a", "train evidence", split="train"),
             evidence_request("b", "heldout evidence", split="eval")]
@@ -277,7 +277,7 @@ def test_shuffle_evidence_controls_do_not_cross_source_splits():
 
 @pytest.mark.parametrize("mode", ["delete_question", "random", None])
 def test_evidence_controls_reject_unknown_modes(mode):
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     with pytest.raises(ValueError, match="mode"):
         make_evidence_controls([evidence_request("a", "evidence")], mode=mode)
@@ -285,7 +285,7 @@ def test_evidence_controls_reject_unknown_modes(mode):
 
 def test_evidence_controls_require_string_states_and_matching_question_spans():
     from copy import deepcopy
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     row = evidence_request("a", "evidence")
     bad_state = dict(row, state={"passage": "evidence", "question": "Question"})
@@ -300,7 +300,7 @@ def test_evidence_controls_require_string_states_and_matching_question_spans():
 
 
 def test_evidence_controls_do_not_invent_labels_or_reuse_encoded_targets():
-    from reverse_jev.data import make_evidence_controls
+    from sciev.data import make_evidence_controls
 
     row = evidence_request("a", "evidence")
     labelled = row["questions"]["verify-a"]
@@ -321,7 +321,7 @@ def test_evidence_controls_do_not_invent_labels_or_reuse_encoded_targets():
     ("The area is 4 m².", "The area is 4 m2."),
 ])
 def test_scientific_identity_preserves_case_and_compatibility_symbols(left, right):
-    from reverse_jev.data import content_fingerprint, group_records, normalized_content
+    from sciev.data import content_fingerprint, group_records, normalized_content
 
     assert normalized_content(left) == left
     assert normalized_content(right) == right
@@ -333,7 +333,7 @@ def test_scientific_identity_preserves_case_and_compatibility_symbols(left, righ
 
 
 def test_scientific_identity_groups_canonical_unicode_and_whitespace_duplicates():
-    from reverse_jev.data import content_fingerprint, group_records, normalized_content
+    from sciev.data import content_fingerprint, group_records, normalized_content
 
     original = "Café evidence uses X and 1 mM."
     equivalent = "\tCafe\u0301  evidence\nuses X  and 1 mM.\r\n"

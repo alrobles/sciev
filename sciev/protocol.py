@@ -55,7 +55,7 @@ def file_fingerprint(path):
 
 
 def _digest(namespace, value):
-    payload = json.dumps(["reverse_jev.protocol", 1, namespace, value], ensure_ascii=False,
+    payload = json.dumps(["sciev.protocol", 1, namespace, value], ensure_ascii=False,
                          sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

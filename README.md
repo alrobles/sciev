@@ -6,7 +6,7 @@ questions (`choice` / `noul` / `score`) over a `state`, answered with
 probabilities in **one forward pass**, calibrated with held-out dev data —
 no text generation or output parsing. Classification errors remain possible.
 
-*(repo: `alrobles/sciev-devel`; package `reverse_jev` for now)*
+*(repo: `alrobles/sciev-devel`; package `sciev` for now)*
 
 General-purpose by design, with a scientific specialty: the heads are
 trained on passage-grounded scientific decisions and transfer zero-shot
@@ -76,7 +76,7 @@ decision JSONL (the example assumes `my_decisions.jsonl` already exists):
 pip install -e .
 gh release download v0.1.1 --repo alrobles/sciev-devel \
     --pattern 'sciev-0.1-*.pt' --dir release
-python -m reverse_jev.eval \
+python -m sciev.eval \
     --ckpt release/sciev-0.1-choice.pt \
     --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
     --r2-temp 0.8274 --decisions-eval my_decisions.jsonl \
@@ -95,7 +95,7 @@ in `data/convert_benchmarks.py`; the scientific battery builder is
 
 ## Domain adaptation (DAPT)
 
-`reverse_jev/dapt.py` implements an experimental masked-token LoRA
+`sciev/dapt.py` implements an experimental masked-token LoRA
 adaptation loop for HF backbones (requires PEFT). The evaluated g2000 and
 g5000 candidates did not satisfy the release gate, so v0.1.1 keeps `c_*`.
 Their head optimization differed from `c_*`; the comparison does not
@@ -103,7 +103,7 @@ isolate DAPT as the cause of the observed transfer losses. See Table 4
 and the protocol caveats in the paper.
 
 ```bash
-python -m reverse_jev.dapt \
+python -m sciev.dapt \
     --hf-backbone GSAI-ML/LLaDA-8B-Instruct \
     --corpus papers.jsonl --field text \
     --out runs/dapt --steps 6000 --bs 16 --seq-len 1024
@@ -114,16 +114,16 @@ python -m reverse_jev.dapt \
 advances the schedule; it does **not** restore optimizer or RNG state.
 It is a warm start, not an exact training-state resume. The DAPT module
 accepts `--hf-backbone`, not `--ckpt`; native MdLMMoE checkpoints can be
-used separately with `reverse_jev.train --ckpt`.
+used separately with `sciev.train --ckpt`.
 
 ## Repo map
 
 | path | qué |
 |---|---|
-| `reverse_jev/model.py` | MdLMMoE + HFBackbone + heads + canonical layout |
-| `reverse_jev/train.py` | head training (CE, ordinal, RL-lite) |
-| `reverse_jev/eval.py` | acc/ECE/flip/auto@5%, temp-fit, remote API eval |
-| `reverse_jev/dapt.py` | domain-adaptive pretraining (LoRA) |
+| `sciev/model.py` | MdLMMoE + HFBackbone + heads + canonical layout |
+| `sciev/train.py` | head training (CE, ordinal, RL-lite) |
+| `sciev/eval.py` | acc/ECE/flip/auto@5%, temp-fit, remote API eval |
+| `sciev/dapt.py` | domain-adaptive pretraining (LoRA) |
 | `data/` | battery builders + benchmark converters |
 | `scripts/*.slurm` | reproducible jobs (KU HPC) |
 | `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |

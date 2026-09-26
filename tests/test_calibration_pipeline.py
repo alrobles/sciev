@@ -7,12 +7,12 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from reverse_jev.calibration import (
+from sciev.calibration import (
     fit_calibration, load_calibration, main, resolve_inference_settings, save_calibration,
 )
-from reverse_jev.decisions import ENCODING_VERSION
-from reverse_jev.eval import eval_decisions_ids
-from reverse_jev.protocol import dataset_contract, file_fingerprint
+from sciev.decisions import ENCODING_VERSION
+from sciev.eval import eval_decisions_ids
+from sciev.protocol import dataset_contract, file_fingerprint
 
 
 def model():
@@ -39,7 +39,7 @@ def checkpoint(tmp_path):
 
 def test_calibration_is_frozen_before_worse_test_risk(tmp_path):
     path = checkpoint(tmp_path)
-    with patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.model.forward_feats", side_effect=scores):
         fitted = fit_calibration(model(), None, rows("temperature", 10), rows("policy", 20),
                                  checkpoint_path=path, device="cpu", canonical=True,
                                  decision_type="choice", min_accepted=2)
@@ -67,7 +67,7 @@ def test_calibration_roles_cannot_reuse_source_groups(tmp_path):
 
 def test_saved_calibration_rejects_test_overlap_and_changed_weights(tmp_path):
     path = checkpoint(tmp_path)
-    with patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.model.forward_feats", side_effect=scores):
         fitted = fit_calibration(model(), None, rows("dev", 10),
                                  checkpoint_path=path, canonical=True)
     output = tmp_path / "calibration.json"
@@ -81,7 +81,7 @@ def test_saved_calibration_rejects_test_overlap_and_changed_weights(tmp_path):
 
 def test_calibration_artifact_is_not_silently_overwritten(tmp_path):
     path = checkpoint(tmp_path)
-    with patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.model.forward_feats", side_effect=scores):
         fitted = fit_calibration(model(), None, rows("dev", 10),
                                  checkpoint_path=path, canonical=True)
     output = tmp_path / "calibration.json"
@@ -92,7 +92,7 @@ def test_calibration_artifact_is_not_silently_overwritten(tmp_path):
 
 def test_frozen_calibration_checks_input_protocol(tmp_path):
     path = checkpoint(tmp_path)
-    with patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.model.forward_feats", side_effect=scores):
         fitted = fit_calibration(model(), None, rows("dev", 10),
                                  checkpoint_path=path, canonical=True)
     output = tmp_path / "calibration.json"
@@ -104,8 +104,8 @@ def test_frozen_calibration_checks_input_protocol(tmp_path):
 @pytest.fixture
 def fitted_artifact(tmp_path):
     path = checkpoint(tmp_path)
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.5, [])), \
-            patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.5, [])), \
+            patch("sciev.model.forward_feats", side_effect=scores):
         artifact = fit_calibration(
             model(), None, rows("temperature", 10), rows("acceptance", 20),
             checkpoint_path=path, min_accepted=2)
@@ -121,7 +121,7 @@ def test_artifact_contract_and_reference_check_do_not_invent_training_provenance
     path = checkpoint(tmp_path)
     dev = rows("temperature", 10)
     dev[0].update(raw_text="private scientific text", source_document_id="private-document")
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.5, [])) as fitter:
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.5, [])) as fitter:
         artifact = fit_calibration(model(), None, dev, checkpoint_path=path,
                                    train_rows=rows("reference", 30))
     assert artifact["schema_version"] == 1
@@ -151,8 +151,8 @@ def test_checkpoint_training_overlap_fails_before_any_forward(tmp_path, role):
     path = checkpoint(tmp_path)
     training = rows(role, 10 if role == "temperature" else 20)
     torch.save({"head_kind": "mlp", "training_data": dataset_contract(training)}, path)
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions") as fitter, \
-            patch("reverse_jev.model.forward_feats") as forward:
+    with patch("sciev.eval.fit_r2_temperature_decisions") as fitter, \
+            patch("sciev.model.forward_feats") as forward:
         with pytest.raises(ValueError, match="overlap"):
             fit_calibration(model(), None, rows("temperature", 10), rows("acceptance", 20),
                             checkpoint_path=path)
@@ -163,7 +163,7 @@ def test_checkpoint_training_overlap_fails_before_any_forward(tmp_path, role):
 def test_known_training_identity_is_scoped_verified(tmp_path):
     path = checkpoint(tmp_path)
     torch.save({"head_kind": "mlp", "training_data": dataset_contract(rows("train", 30))}, path)
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])):
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])):
         artifact = fit_calibration(model(), None, rows("dev", 10), checkpoint_path=path)
     report = artifact["provenance"]["training_overlap_check"]
     assert report["status"] == "verified"
@@ -181,8 +181,8 @@ def test_all_calibration_rows_are_validated_before_first_forward(tmp_path, field
     temperature, acceptance = rows("temperature", 10), rows("acceptance", 20)
     target = temperature if role == "temperature" else acceptance
     target[-1][field] = value
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions") as fitter, \
-            patch("reverse_jev.model.forward_feats") as forward:
+    with patch("sciev.eval.fit_r2_temperature_decisions") as fitter, \
+            patch("sciev.model.forward_feats") as forward:
         with pytest.raises(ValueError):
             fit_calibration(model(), None, temperature, acceptance, checkpoint_path=path)
     fitter.assert_not_called()
@@ -195,7 +195,7 @@ def test_explicit_empty_calibration_or_reference_splits_fail(tmp_path, role):
     temperature = [] if role == "temperature" else rows("temperature", 10)
     acceptance = [] if role == "acceptance" else None
     training = [] if role == "train" else None
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions") as fitter:
+    with patch("sciev.eval.fit_r2_temperature_decisions") as fitter:
         with pytest.raises(ValueError, match="empty|at least one|nonempty"):
             fit_calibration(model(), None, temperature, acceptance,
                             checkpoint_path=path, train_rows=training)
@@ -207,7 +207,7 @@ def test_supplied_training_reference_cannot_overlap_dev(tmp_path):
     dev = rows("dev", 10)
     reference = rows("reference", 30)
     reference[0]["source_group"] = dev[0]["split_group"]
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions") as fitter:
+    with patch("sciev.eval.fit_r2_temperature_decisions") as fitter:
         with pytest.raises(ValueError, match="overlap"):
             fit_calibration(model(), None, dev, checkpoint_path=path, train_rows=reference)
     fitter.assert_not_called()
@@ -219,8 +219,8 @@ def test_acceptance_uses_canonical_original_tie_identity_and_max_probability(tmp
     for index, row in enumerate(acceptance):
         if index % 2:
             row.update(opts=[[2], [1]], gold=1)
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(3.0, [])), \
-            patch("reverse_jev.model.forward_feats", side_effect=lambda *args: torch.zeros(2)):
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(3.0, [])), \
+            patch("sciev.model.forward_feats", side_effect=lambda *args: torch.zeros(2)):
         artifact = fit_calibration(model(), None, rows("temperature", 10), acceptance,
                                    checkpoint_path=path, min_accepted=2)
     policy = artifact["acceptance_policy"]
@@ -249,7 +249,7 @@ def test_calibration_restores_module_and_nested_training_modes(tmp_path, fail):
             raise RuntimeError("forward failed")
         return scores(*args)
 
-    with patch("reverse_jev.model.forward_feats", side_effect=checking_scores):
+    with patch("sciev.model.forward_feats", side_effect=checking_scores):
         if fail:
             with pytest.raises(RuntimeError, match="forward failed"):
                 fit_calibration(backbone, head, rows("dev", 10), checkpoint_path=checkpoint(tmp_path))
@@ -326,7 +326,7 @@ def test_fit_uses_actual_sequence_length_and_records_legacy_encoding_shift(tmp_p
     torch.save({"head_kind": "mlp", "inference": {"encoding": "legacy_ids"}}, path)
     backbone = model()
     backbone.seq_len = 80
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])):
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])):
         artifact = fit_calibration(backbone, None, rows("dev", 10), checkpoint_path=path)
     assert artifact["inference"]["seq_len"] == 80
     assert artifact["inference"]["encoding"] == ENCODING_VERSION
@@ -390,8 +390,8 @@ def test_load_accepts_relocated_identical_checkpoint_without_refitting(tmp_path,
     relocated.write_bytes(checkpoint_path.read_bytes())
     output = tmp_path / "calibration.json"
     save_calibration(output, artifact)
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions") as fitter, \
-            patch("reverse_jev.metrics.fit_acceptance_policy") as policy_fitter:
+    with patch("sciev.eval.fit_r2_temperature_decisions") as fitter, \
+            patch("sciev.metrics.fit_acceptance_policy") as policy_fitter:
         loaded = load_calibration(
             output, relocated, evaluation_rows=rows("test", 30, gold=0),
             expected_inference={"layers": (-1,), "canonical_order": True})
@@ -410,7 +410,7 @@ def test_load_rejects_all_known_calibration_identity_overlaps(tmp_path, identity
         evaluation[0].update(ctx=dev[0]["ctx"], opts=list(reversed(dev[0]["opts"])), gold=0)
     else:
         evaluation[0][identity] = dev[0][identity]
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])):
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])):
         artifact = fit_calibration(model(), None, dev, checkpoint_path=path)
     output = tmp_path / "calibration.json"
     save_calibration(output, artifact)
@@ -473,7 +473,7 @@ def test_cli_preflight_fails_before_loading_a_model(tmp_path, failure):
         config = tmp_path / "bad.yaml"
         config.write_text("model: 7\n", encoding="utf-8")
         args += ["--config", str(config)]
-    with patch("reverse_jev.model.load_decision") as loader:
+    with patch("sciev.model.load_decision") as loader:
         with pytest.raises((ValueError, FileExistsError, SystemExit)):
             main(args)
     loader.assert_not_called()
@@ -493,9 +493,9 @@ def test_cli_uses_metadata_native_config_and_records_dataset_fingerprints(tmp_pa
     config = tmp_path / "native.yaml"
     config.write_text("model:\n  seq_len: 64\n", encoding="utf-8")
     output = tmp_path / "calibration.json"
-    with patch("reverse_jev.model.load_decision", return_value=(model(), None)) as loader, \
-            patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])), \
-            patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.model.load_decision", return_value=(model(), None)) as loader, \
+            patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])), \
+            patch("sciev.model.forward_feats", side_effect=scores):
         main(["--ckpt", str(path), "--temperature-dev", str(temperature),
               "--acceptance-dev", str(acceptance), "--train-reference", str(reference),
               "--out", str(output), "--device", "cpu", "--config", str(config),
@@ -518,8 +518,8 @@ def test_cli_uses_metadata_native_config_and_records_dataset_fingerprints(tmp_pa
 
 def test_accept_none_policy_round_trips_without_missing_policy_ambiguity(tmp_path):
     path = checkpoint(tmp_path)
-    with patch("reverse_jev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])), \
-            patch("reverse_jev.model.forward_feats", side_effect=scores):
+    with patch("sciev.eval.fit_r2_temperature_decisions", return_value=(1.0, [])), \
+            patch("sciev.model.forward_feats", side_effect=scores):
         artifact = fit_calibration(model(), None, rows("temperature", 10), rows("acceptance", 20),
                                    checkpoint_path=path)
     assert artifact["acceptance_policy"] is not None

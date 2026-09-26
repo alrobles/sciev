@@ -4,8 +4,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Aligned systemone-v2 data build: elite battery + external benchmarks.
 # Same source inputs as the historical c_* battery (qa_devin_elite.jsonl)
@@ -14,7 +14,7 @@
 # Outputs land in <out>/systemone-v2/ next to the legacy files.
 
 set -euo pipefail
-RJ=${RJ:-/beegfs/a474r867/reverse-jev}
+RJ=${RJ:-/beegfs/a474r867/sciev}
 ECO=${ECO:-/beegfs/a474r867/ecoreasoner}
 BAT=${BAT:-$RJ/data/sci_battery}
 EXT=${EXT:-$RJ/data/bench_external}

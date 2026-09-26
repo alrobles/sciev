@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:50:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Per-type heads on frozen LLaDA-8B — best recipe per kind from sci_llada2:
 #   pt_choice : AttnPoolHead L{8,16,24,32}, orders=1, choice train only
@@ -15,7 +15,7 @@
 # Each evals on its own kind, temp-fit on its own kind's dev split.
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 BAT=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
 PY=/beegfs/a474r867/bioai/venv/bin/python
@@ -30,7 +30,7 @@ cd "$RJ"
 train() {  # tag head_kind orders steps kind
     [ -f "$RUNS/$1/decision.pt" ] && { echo "=== SKIP $1 (done) ==="; return; }
     echo "=== TRAIN $1 ==="
-    $PY -m reverse_jev.train \
+    $PY -m sciev.train \
         --decisions-train "$BAT/sci_$5_train.jsonl" \
         --hf-backbone "$LLADA" \
         --r2-mode spanpool --head-kind "$2" --r2-layers="$LAYERS" \
@@ -45,7 +45,7 @@ train pt_score  mlp      4 3000 score
 
 for KIND in choice noul score; do
     echo "=== EVAL $KIND (pt_$KIND) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/pt_$KIND/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" \
         --r2-temp-fit-decisions "$BAT/sci_${KIND}_dev.jsonl" \

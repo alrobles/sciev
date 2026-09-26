@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=03:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Baseline: c_* recipe on the ecoreasoner own-pretrained backbone bw1_sr
 # (MdLMMoE 1.4B, 16 layers, hidden 1024, heads 16, 8 experts top-2,
@@ -16,7 +16,7 @@
 # R2 truncates ctx to seq_len//2=384 and clamps OOB ids, so it runs.
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 BAT=$RJ/data/sci_battery
 EXT=$RJ/data/bench_external
 RUNS=$RJ/runs/sci
@@ -42,7 +42,7 @@ train_head () {  # name kind data extra...
         echo "=== SKIP $name (done) ==="; return
     fi
     echo "=== TRAIN $name ==="
-    $PY -m reverse_jev.train \
+    $PY -m sciev.train \
         --decisions-train "$data" \
         --ckpt "$CKPT" --config "$CFG" \
         --freeze --r2-mode spanpool --r2-layers="$LAYERS" \
@@ -54,7 +54,7 @@ train_head () {  # name kind data extra...
 eval_head () {  # name evalfile out
     local name=$1 ev=$2 out=$3
     echo "=== EVAL $out ($name) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/$name/decision.pt" --config "$CFG" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
         --r2-temp-fit-decisions "$BAT/sci_${name#*_}_dev.jsonl" \

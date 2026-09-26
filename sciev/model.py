@@ -429,7 +429,7 @@ def load_decision(ckpt_path, config=None, device="cpu", lora_adapter=None):
     """Load a decision checkpoint: backbone + optional trained DecisionHead.
 
     Accepts either an ecoreasoner {"model": sd} file (returns head=None)
-    or a reverse-jev {"model": sd, "head": sd} file — or an HF-adapter
+    or a sciev {"model": sd, "head": sd} file — or an HF-adapter
     checkpoint {"hf_backbone": name, "head": sd} where only the head is
     stored and the backbone is fetched from HF/the local cache.
     """

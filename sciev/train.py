@@ -1,4 +1,4 @@
-"""reverse_jev.train — decision fine-tune on the R1 readout (RCDL-lite).
+"""sciev.train — decision fine-tune on the R1 readout (RCDL-lite).
 
 Objective: state + instructions + [MASK] -> softmax over candidate token-id
 sets -> cross-entropy toward the labeled option. Optionally adds a
@@ -9,7 +9,7 @@ Per-example forwards + grad accumulation (the backbone has no padding mask;
 batching would leak pad tokens into attention). Slow but honest — micro
 runs only, per the repo's <4h test-and-drop rule.
 
-  python -m reverse_jev.train --data train.jsonl --dev dev.jsonl \
+  python -m sciev.train --data train.jsonl --dev dev.jsonl \
       --ckpt runs/f0/checkpoint-g10000/model.pt --out runs/dec-001 \
       --steps 2000 --lr 2e-5 --accum 8 --rl 0
 """

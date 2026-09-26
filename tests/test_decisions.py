@@ -5,14 +5,14 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from reverse_jev.decisions import (
+from sciev.decisions import (
     ENCODING_VERSION,
     decision_logits,
     encode_question,
     prepare_decision,
     validate_decision_row,
 )
-from reverse_jev.model import AttnPoolHead, DecisionHead, MdLMMoE
+from sciev.model import AttnPoolHead, DecisionHead, MdLMMoE
 
 
 class CharTokenizer:
@@ -132,7 +132,7 @@ def test_logits_are_restored_to_original_identities_in_one_forward():
 
     for perm in itertools.permutations(range(3)):
         presented = [options[index] for index in perm]
-        with patch("reverse_jev.model.forward_feats", side_effect=score) as forward:
+        with patch("sciev.model.forward_feats", side_effect=score) as forward:
             logits, layout = decision_logits(model, None, [9], presented, "cpu", canonical=True)
         assert forward.call_count == 1
         assert layout.ids == [9, 3, 5, 8]
@@ -156,7 +156,7 @@ def test_attnpool_contract_rejects_wrong_layer_count():
 
 
 def test_canonical_ties_use_visible_content_not_caller_position():
-    from reverse_jev.decisions import decision_prediction
+    from sciev.decisions import decision_prediction
 
     options = [[5], [3], [8]]
     for perm in itertools.permutations(range(3)):
@@ -167,7 +167,7 @@ def test_canonical_ties_use_visible_content_not_caller_position():
 
 
 def test_probability_transform_is_permutation_stable():
-    from reverse_jev.decisions import decision_probabilities
+    from sciev.decisions import decision_probabilities
 
     values = torch.tensor([3.5, -12.0, 0.0, 1.8])
     reference = decision_probabilities(values, 2.7)

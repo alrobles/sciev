@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=02:00:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # External benchmarks on best elite heads (c_*):
 #   c_choice -> GPQA main + diamond (choice)
@@ -15,7 +15,7 @@
 # Temp-fit stays on each kind's elite dev (no benchmark dev leakage).
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 BAT=$RJ/data/sci_battery
 EXT=$RJ/data/bench_external
 RUNS=$RJ/runs/sci
@@ -34,7 +34,7 @@ cd "$RJ"
 
 for CFG in main diamond; do
     echo "=== EVAL gpqa_$CFG (c_choice) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/c_choice/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
         --r2-temp-fit-decisions "$BAT/sci_choice_dev.jsonl" \
@@ -43,7 +43,7 @@ for CFG in main diamond; do
 done
 for KIND in noul score; do
     echo "=== EVAL scifact $KIND (c_$KIND) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/c_$KIND/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
         --r2-temp-fit-decisions "$BAT/sci_${KIND}_dev.jsonl" \
@@ -54,7 +54,7 @@ done
 # enron 98.7 / sst2 95.7 / agnews 91.3 / banking77 76.0
 for DS in enron/enron sst2/sst2 ag_news/agnews banking77/banking77; do
     echo "=== EVAL $DS (c_choice) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/c_choice/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
         --r2-temp-fit-decisions "$BAT/sci_choice_dev.jsonl" \

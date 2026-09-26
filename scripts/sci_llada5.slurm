@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:50:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Phase B: retrain per-type heads on sci_battery_v2 (~30x data).
 # Recipes = sci_llada4 winners + canonical order:
@@ -16,7 +16,7 @@
 # Eval: elite eval set (comparable) + v2 eval (in-distribution).
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 BAT=$RJ/data/sci_battery_v2
 ELI=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
@@ -39,7 +39,7 @@ train() {  # tag head_kind steps kind extra...
     local TAG=$1 HK=$2 STEPS=$3 KIND=$4; shift 4
     [ -f "$RUNS/$TAG/decision.pt" ] && { echo "=== SKIP $TAG (done) ==="; return; }
     echo "=== TRAIN $TAG ==="
-    $PY -m reverse_jev.train \
+    $PY -m sciev.train \
         --decisions-train "$BAT/sci_${KIND}_train.jsonl" \
         --hf-backbone "$LLADA" \
         --r2-mode spanpool --head-kind "$HK" --r2-layers="$LAYERS" \
@@ -55,7 +55,7 @@ train v2_score  mlp      8000  score --ordinal 1.0
 
 for KIND in choice noul score; do
     echo "=== EVAL elite $KIND (v2_$KIND) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/v2_$KIND/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" \
         --canonical-order \
@@ -63,7 +63,7 @@ for KIND in choice noul score; do
         --decisions-eval "$ELI/sci_${KIND}_eval.jsonl" \
         --device cuda --out "$RUNS/eval_v2_${KIND}_elite.json"
     echo "=== EVAL v2 $KIND (v2_$KIND) ==="
-    $PY -m reverse_jev.eval \
+    $PY -m sciev.eval \
         --ckpt "$RUNS/v2_$KIND/decision.pt" \
         --r2-mode spanpool --r2-layers="$LAYERS" \
         --canonical-order \

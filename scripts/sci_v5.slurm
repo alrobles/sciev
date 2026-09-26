@@ -5,14 +5,14 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=05:30:00
-#SBATCH --output=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.out
-#SBATCH --error=/beegfs/a474r867/reverse-jev/runs/sci/%x_%j.err
+#SBATCH --output=/beegfs/a474r867/sciev/runs/sci/%x_%j.out
+#SBATCH --error=/beegfs/a474r867/sciev/runs/sci/%x_%j.err
 #
 # Spanpool-FT on the *scientific* decision battery, init from v5-1b.
 # Submit with:  sbatch --dependency=afterany:<v5-1b jobids> scripts/sci_v5.slurm
 
 set -euo pipefail
-RJ=/beegfs/a474r867/reverse-jev
+RJ=/beegfs/a474r867/sciev
 ECO=/beegfs/a474r867/ecoreasoner
 BAT=$RJ/data/sci_battery
 RUNS=$RJ/runs/sci
@@ -44,7 +44,7 @@ cat "$BAT"/sci_choice_dev.jsonl \
 run() { apptainer exec --nv --overlay "$OVL":ro "$SIF" "$PY" "$@"; }
 
 echo "=== TRAIN sci spanpool ft (v5-1b init) ==="
-run -m reverse_jev.train \
+run -m sciev.train \
     --decisions-train "$BAT/sci_all_train.jsonl" \
     --ckpt "$CKPT" --config "$CFG" \
     --r2-mode spanpool --steps 8000 --accum 1 \
@@ -53,7 +53,7 @@ run -m reverse_jev.train \
 
 for KIND in choice noul score; do
     echo "=== EVAL $KIND (sci_v5_sp) ==="
-    run -m reverse_jev.eval \
+    run -m sciev.eval \
         --ckpt "$RUNS/sci_v5_sp/decision.pt" --config "$CFG" \
         --r2-mode spanpool \
         --r2-temp-fit-decisions "$BAT/sci_all_dev.jsonl" \

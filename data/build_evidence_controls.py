@@ -5,7 +5,7 @@ Input: sci_decisions_{split}_text.jsonl produced by build_sci_decisions.py
 (text requests: state + questions, carrying evidence_span / split_group /
 split provenance).
 
-Controls (reverse_jev.data.make_evidence_controls):
+Controls (sciev.data.make_evidence_controls):
   empty   — the evidence span is removed
   shuffle — the evidence span is replaced by a donor passage from a
             *different* source group within the same split
@@ -21,7 +21,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from reverse_jev.data import (
+from sciev.data import (
     add_decision, exclude_record, input_fingerprints, make_evidence_controls,
     read_jsonl, write_dataset,
 )
