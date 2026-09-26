@@ -573,3 +573,37 @@ def test_evidence_control_score_reference_within_rubric():
     assert reference_gold_index(q) == 1
     assert reference_gold_index({"type": "noul", "reference_label": True}) == 0
     assert reference_gold_index({"type": "noul", "reference_label": False}) == 1
+
+
+def test_hard_choice_uses_only_same_passage_and_perturbation_distractors():
+    recs = []
+    for i in range(16):
+        pid = f"p{i // 2}"
+        recs.append(dict(pid=pid, passage=f"Passage {pid} evidence. " * 6,
+                         q=f"Question {i}?", a=f"value {10 + i} units",
+                         type="numerical", split_group=pid, content_hash=pid,
+                         sample_id=f"s{i}", source="t", source_file="t.jsonl", source_line=i))
+    ids, _ = sci.build(recs, CharTokenizer(), random.Random(1), "eval",
+                       max_ctx=700, max_opt=80, overflow="exclude", hard_choice=True)
+    choice = [r for r in ids if r["kind"] == "choice"]
+    assert choice
+    allowed = {"same_passage_swap", "number_perturb", "source_reference"}
+    for row in choice:
+        assert row["distractor_policy"] == "hard_same_passage"
+        assert {n["strategy"] for n in row["negative_provenance"]} <= allowed
+
+
+def test_hard_choice_excludes_when_strict_pool_insufficient():
+    recs = []
+    for i in range(16):
+        recs.append(dict(pid=f"p{i}", passage=f"Passage {i} evidence. " * 6,
+                         q=f"Question {i}?", a=f"textual answer alpha",
+                         type="definitional", split_group=f"p{i}",
+                         content_hash=f"h{i}", sample_id=f"s{i}",
+                         source="t", source_file="t.jsonl", source_line=i))
+    exclusions = []
+    ids, _ = sci.build(recs, CharTokenizer(), random.Random(1), "eval", exclusions=exclusions,
+                       max_ctx=700, max_opt=80, overflow="exclude", hard_choice=True)
+    choice = [r for r in ids if r["kind"] == "choice"]
+    assert not choice
+    assert "insufficient_unique_distractors" in {e["reason"] for e in exclusions}

@@ -211,8 +211,23 @@ def _cross_candidates(recs, record, positives, rng, tag):
     return candidates
 
 
+def _perturb_variants(answer, rng, *, limit=3, attempts=12, positives=frozenset()):
+    """Up to `limit` distinct numeric perturbations of `answer`."""
+    variants, seen = [], set()
+    for _ in range(attempts):
+        if len(variants) >= limit:
+            break
+        pert = perturb_number(answer, rng)
+        key = normalized_content(pert) if pert else None
+        if pert is None or key in positives or key in seen:
+            continue
+        seen.add(key)
+        variants.append(pert)
+    return variants
+
+
 def build(recs, tok, rng, tag, *, exclusions=None, max_ctx=MAX_CTX, max_opt=MAX_OPT,
-          overflow="error"):
+          overflow="error", hard_choice=False):
     recs = prepare_records(recs, exclusions)
     if any(r.get("split", tag) != tag for r in recs):
         raise ValueError("negative pools must contain only records from the requested split")
@@ -236,25 +251,40 @@ def build(recs, tok, rng, tag, *, exclusions=None, max_ctx=MAX_CTX, max_opt=MAX_
         sibs = list({normalized_content(c["answer"]): c for c in sibs}.values())
         rng.shuffle(sibs)
         distr = []
-        distr += sibs[:2]                          # hard: same passage
-        pert_answer = perturb_number(gold_a, rng)
-        pert = (_candidate(pert_answer, r, "number_perturb", tag)
-                if pert_answer and normalized_content(pert_answer) not in positives else None)
-        if pert and all(normalized_content(c["answer"]) != normalized_content(pert_answer) for c in distr):
-            distr.append(pert)                     # hard: perturbed gold
         cross = _cross_candidates(recs, r, positives, rng, tag)
-        for c in cross:                           # fill: other passages
-            if len(distr) >= 3:
-                break
-            if all(normalized_content(d["answer"]) != normalized_content(c["answer"]) for d in distr):
-                distr.append(c)
+        if hard_choice:
+            # Strict pool: only same-passage swaps and numeric perturbations —
+            # no cross-passage fill. Every distractor stays plausible-looking
+            # without the passage, so agreement-with-reference under evidence
+            # controls measures residual option-side leakage, not topical cues.
+            distr += sibs[:3]
+            for pert_answer in _perturb_variants(gold_a, rng, limit=3, positives=positives):
+                if len(distr) >= 3:
+                    break
+                if all(normalized_content(c["answer"]) != normalized_content(pert_answer) for c in distr):
+                    distr.append(_candidate(pert_answer, r, "number_perturb", tag))
+            pert = next((c for c in distr if c["provenance"]["strategy"] == "number_perturb"), None)
+        else:
+            distr += sibs[:2]                          # hard: same passage
+            pert_answer = perturb_number(gold_a, rng)
+            pert = (_candidate(pert_answer, r, "number_perturb", tag)
+                    if pert_answer and normalized_content(pert_answer) not in positives else None)
+            if pert and all(normalized_content(c["answer"]) != normalized_content(pert_answer) for c in distr):
+                distr.append(pert)                     # hard: perturbed gold
+            for c in cross:                           # fill: other passages
+                if len(distr) >= 3:
+                    break
+                if all(normalized_content(d["answer"]) != normalized_content(c["answer"]) for d in distr):
+                    distr.append(c)
         if len(distr) >= 3:
             opts = distr[:3] + [positive]
             rng.shuffle(opts)
             answers = [c["answer"] for c in opts]
             question = {"type": "choice", "instructions": INSTR_CHOICE,
                         "criteria": {answer: None for answer in answers}, "label": gold_a}
-            meta = dict(metadata, label_status="heuristic", negative_provenance=[
+            meta = dict(metadata, label_status="heuristic",
+                        distractor_policy="hard_same_passage" if hard_choice else "standard",
+                        negative_provenance=[
                 dict(c["provenance"], option_key=c["answer"]) for c in opts])
             add_decision(id_rows, text_by_state, tok, state, f"choice_{identity}",
                          question, answers.index(gold_a), meta, max_ctx, max_opt,
@@ -316,6 +346,9 @@ def main():
                     default="exclude",
                     help="input over budget: fail, exclude with record, or "
                          "truncate with recorded counts")
+    ap.add_argument("--hard-choice", action="store_true",
+                    help="strict choice distractor pool: same-passage swaps and "
+                         "numeric perturbations only, no cross-passage fill")
     args = ap.parse_args()
     if bool(args.qa) == bool(args.qa_raw):
         ap.error("provide exactly one of --qa or --qa-raw")
@@ -346,7 +379,8 @@ def main():
     for tag, recs in splits.items():
         id_rows, text_rows = build(recs, tok, random.Random(f"{args.seed}:{tag}"), tag,
                                    exclusions=exclusions, max_ctx=args.max_ctx,
-                                   max_opt=args.max_opt, overflow=args.overflow)
+                                   max_opt=args.max_opt, overflow=args.overflow,
+                                   hard_choice=args.hard_choice)
         for kind in ("choice", "noul", "score"):
             files[out / f"sci_{kind}_{tag}.jsonl"] = [r for r in id_rows if r["kind"] == kind]
         files[out / f"sci_decisions_{tag}_text.jsonl"] = text_rows
@@ -358,6 +392,7 @@ def main():
                 "filter_policy": args.filter_policy, "filter_semantics": "lexical consistency, not semantic proof",
                 "split_unit": "connected source identifiers and normalized passage content",
                 "split_fractions": {"dev": args.dev_frac, "eval": args.eval_frac}, "requested_counts": counts,
+                "distractor_policy": "hard_same_passage" if args.hard_choice else "standard",
                 "negative_policy": "split-local heuristic alternatives; not human-verified negatives",
                 "score_policy": "synthetic strategy proxy, not verified relevance or correctness",
                 "counts": stats, "exclusions": exclusions}
