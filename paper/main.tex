@@ -39,7 +39,10 @@ binding constraint. On public benchmarks, \ours{} reaches 0.853 on
 SciFact claim verification and transfers zero-shot to general
 classification (0.930 SST-2, 0.854 AG News), while parametric
 knowledge tasks remain bounded by the backbone ceiling (0.315 GPQA
-vs.\ backbone $\approx$0.33).
+vs.\ backbone $\approx$0.33). LoRA domain-adaptive pretraining on
+scientific full texts improves in-distribution automation but degrades
+external transfer (SciFact $-13$ points), so the released model keeps
+the backbone frozen.
 \end{abstract}
 
 \section{Introduction}
@@ -85,9 +88,10 @@ graded scoring ($+9$ points).
 out-of-domain data increase fails to transfer ($-13$ points), and on
 GPQA the head reaches the backbone's reported ceiling ($0.315$ vs.\
 $\approx0.33$): decision accuracy on knowledge tasks is a property of
-the backbone, not the readout. Domain knowledge must be injected into
-the weights---which we do via LoRA domain-adaptive pretraining on
-scientific full texts.
+the backbone, not the readout. Injecting domain knowledge into the
+weights via LoRA domain-adaptive pretraining on scientific full texts
+improves in-distribution automation but degrades external transfer,
+so the released model keeps the backbone frozen.
 \end{itemize}
 
 We evaluate on a passage-grounded scientific decision battery and on
@@ -228,6 +232,36 @@ $K{\le}4$ classification is strong (SST-2, AG News); $K{=}77$ degrades
 because training used $K{\le}4$.}
 \end{table}
 
+\subsection{Backbone trajectory and domain adaptation}
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lccccccc}
+\toprule
+ & \multicolumn{3}{c}{elite (in-dist.)} & \multicolumn{2}{c}{GPQA} &
+   \multicolumn{2}{c}{SciFact} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+backbone & choice & noul & score & main & diamond & noul & score \\
+\midrule
+bw1\_sr 1.4B (ours, frozen) & 0.280 & 0.667 & 0.334 & 0.266 & 0.283 & 0.594 & 0.300 \\
+\midrule
+LLaDA-8B frozen (\textbf{release}) & 0.870 & \textbf{0.783} & \textbf{0.608} & \textbf{0.315} & \textbf{0.328} & \textbf{0.853} & \textbf{0.624} \\
+\quad +DAPT g2000 & 0.879 & 0.779 & 0.598 & 0.281 & 0.268 & 0.812 & 0.515 \\
+\quad +DAPT g5000 & \textbf{0.884} & 0.756 & 0.593 & 0.259 & 0.242 & 0.724 & 0.500 \\
+\bottomrule
+\end{tabular}
+\caption{Same head recipe, three backbones. bw1\_sr (1.4B masked-diffusion
+MoE pretrained on our corpus, 768-token window) leaves choice/score near
+chance---the head cannot compensate for backbone knowledge. LoRA
+domain-adaptive pretraining of LLaDA-8B on scientific full texts
+($\sim$82M tokens, masked-diffusion objective) improves in-distribution
+choice (+1.4 points) and sharply improves elite automation (noul
+auto@5\% $0.278 \to 0.413$ at g2000) but degrades every external
+benchmark---SciFact noul $-13$ points at g5000---and the degradation
+grows with more adaptation steps. For v0.1 we therefore release the
+frozen-backbone heads; DAPT is a documented in-domain--transfer
+trade-off, not a free upgrade.}
+\end{table}
+
 \section{Discussion}
 
 \paragraph{What a decision layer buys.}
@@ -250,6 +284,19 @@ training coverage). This suggests the development loop for open
 decision models: keep the head recipe fixed, improve the backbone's
 domain knowledge (domain-adaptive pretraining, or a natively trained
 domain backbone), and treat benchmarks like GPQA as backbone probes.
+
+\paragraph{Adaptation trades in-domain fit for transfer.}
+LoRA domain-adaptive pretraining on $\sim$82M tokens of scientific text
+confirms the separation empirically: it moves the backbone's knowledge
+distribution toward our corpus (elite choice $+1.4$, noul automation
+$0.278 \to 0.413$) while eroding exactly the general grounding the
+frozen backbone transfers to SciFact ($-13$ points) and GPQA ($-6$),
+with degradation growing from 2{,}000 to 5{,}000 steps. Weight-space
+domain adaptation is therefore not a free upgrade for a decision layer:
+it pays for in-domain automation with generalization. A backbone whose
+\emph{pretraining} distribution already covers the domain would not pay
+this cost, which is the motivation for a natively trained domain
+backbone.
 
 \paragraph{Relation to the ecosystem.}
 Concurrent open reimplementations (kev, openjev, laya) share the API
