@@ -8,6 +8,10 @@ from numbers import Integral, Real
 ENCODING_VERSION = "systemone-v2"
 
 
+class InputOverflow(ValueError):
+    """Encoded input exceeds the declared token budget."""
+
+
 def _integer(value, name, minimum=0):
     if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -126,9 +130,9 @@ def encode_question(tokenizer, state, question, max_ctx=640, max_opt=120,
             for option in options]
     if overflow == "error":
         if len(ctx) > max_ctx:
-            raise ValueError(f"context exceeds max_ctx={max_ctx}; truncation was not authorized")
+            raise InputOverflow(f"context exceeds max_ctx={max_ctx}; truncation was not authorized")
         if any(len(option) > max_opt for option in opts):
-            raise ValueError(f"option exceeds max_opt={max_opt}; truncation was not authorized")
+            raise InputOverflow(f"option exceeds max_opt={max_opt}; truncation was not authorized")
     row = {"ctx": ctx[:max_ctx], "opts": [option[:max_opt] for option in opts],
            "kind": kind, "option_keys": keys, "encoding": ENCODING_VERSION,
            "schema_version": 2,

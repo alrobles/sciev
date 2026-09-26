@@ -87,12 +87,13 @@ def _text_for_kind(text_rows, kind):
     return selected
 
 
-def conv_gpqa(src, out, tok, rng, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None):
+def conv_gpqa(src, out, tok, rng, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None,
+              overflow="exclude"):
     id_rows, text_by_state, exclusions = [], {}, []
     with open(src, newline="", encoding="utf-8") as f:
         inputs = list(csv.DictReader(f))
     manifest = _manifest(src, tok, rng, len(inputs), exclusions, max_ctx, max_opt, benchmark="gpqa", seed=seed,
-                         evidence_regime="no_passage_parametric")
+                         overflow=overflow, evidence_regime="no_passage_parametric")
     rows = []
     fields = ("Question", "Correct Answer", *(f"Incorrect Answer {j}" for j in (1, 2, 3)))
     for i, r in enumerate(inputs):
@@ -119,18 +120,19 @@ def conv_gpqa(src, out, tok, rng, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None
         add_decision(id_rows, text_by_state, tok, f"Question: {q}", f"gpqa_{r['sample_id'][:20]}",
                      {"type": "choice", "instructions": INSTR_CHOICE,
                       "criteria": {option: None for option in opts}, "label": gold},
-                     opts.index(gold), metadata, max_ctx, max_opt)
+                     opts.index(gold), metadata, max_ctx, max_opt, overflow, exclusions)
     manifest["counts"]["accepted_records"] = len(rows)
     return write_rows(out, id_rows, list(text_by_state.values()), manifest)
 
 
 def conv_scifact(src, out_prefix, tok, rng, *, legacy_score=False,
-                  max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None):
+                  max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None, overflow="exclude"):
     import pandas as pd
     inputs = pd.read_parquet(src).to_dict("records")
     id_rows, text_by_state, exclusions, rows = [], {}, [], []
     split = Path(src).stem
     manifest = _manifest(src, tok, rng, len(inputs), exclusions, max_ctx, max_opt, benchmark="scifact", seed=seed,
+                         overflow=overflow,
                          primary_tasks=["support_vs_not", "nominal_verdict"], legacy_score=legacy_score,
                          split_unit="provided source split; document identifiers or normalized evidence passage")
     for i, r in enumerate(inputs):
@@ -165,18 +167,21 @@ def conv_scifact(src, out_prefix, tok, rng, *, legacy_score=False,
                      {"type": "noul", "instructions": INSTR_NOUL, "label": supported,
                       "criteria": {"true": "The passage supports the claim.",
                                    "false": "The passage contradicts the claim or provides insufficient evidence."}},
-                     0 if supported else 1, dict(metadata, task="scifact_support_vs_not"), max_ctx, max_opt)
+                     0 if supported else 1, dict(metadata, task="scifact_support_vs_not"),
+                     max_ctx, max_opt, overflow, exclusions)
         add_decision(id_rows, text_by_state, tok, state, f"{identity}_c",
                      {"type": "choice", "instructions": "How does the passage relate to the claim?",
                       "criteria": SCIFACT_CRITERIA, "label": verdict}, list(SCIFACT_CRITERIA).index(verdict),
-                     dict(metadata, task="scifact_nominal_verdict", label_space=list(SCIFACT_CRITERIA)), max_ctx, max_opt)
+                     dict(metadata, task="scifact_nominal_verdict", label_space=list(SCIFACT_CRITERIA)),
+                     max_ctx, max_opt, overflow, exclusions)
         if legacy_score:
             score_gold = {"SUPPORT": 2, "CONTRADICT": 1, "NEI": 0}[verdict]
             add_decision(id_rows, text_by_state, tok, state, f"{identity}_s",
                          {"type": "score", "instructions": "Rate the claim.",
                           "criteria": SCORE_LEGEND, "label": score_gold}, score_gold,
                          dict(metadata, task="scifact_legacy_ordinal_proxy", legacy_proxy=True,
-                              label_status="legacy_proxy", rubric_provenance="legacy_verdict_mapping"), max_ctx, max_opt)
+                              label_status="legacy_proxy", rubric_provenance="legacy_verdict_mapping"),
+                         max_ctx, max_opt, overflow, exclusions)
     files = {}
     for kind in ("noul", "choice", *(("score",) if legacy_score else ())):
         task_name = "score_legacy_proxy" if kind == "score" else kind
@@ -187,7 +192,8 @@ def conv_scifact(src, out_prefix, tok, rng, *, legacy_score=False,
     return write_dataset(files, Path(f"{out_prefix}_manifest.json"), manifest)
 
 
-def conv_classification(src, out, tok, rng, cfg, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None):
+def conv_classification(src, out, tok, rng, cfg, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None,
+                        overflow="exclude"):
     """Generic K-way classification -> choice rows.
 
     cfg: {text_field, label_names, ctx_fmt, question, label_field?,
@@ -209,7 +215,7 @@ def conv_classification(src, out, tok, rng, cfg, *, max_ctx=MAX_CTX, max_opt=MAX
     id_rows, text_by_state, exclusions, rows = [], {}, [], []
     tag, label_field = cfg.get("tag", Path(src).stem), cfg.get("label_field", "label")
     manifest = _manifest(src, tok, rng, len(inputs), exclusions, max_ctx, max_opt, benchmark=tag, seed=seed,
-                         label_space=labels)
+                         overflow=overflow, label_space=labels)
     if cfg.get("labels_file"):
         manifest["inputs"] = input_fingerprints([src, cfg["labels_file"]])
     for i, r in enumerate(inputs):
@@ -231,7 +237,7 @@ def conv_classification(src, out, tok, rng, cfg, *, max_ctx=MAX_CTX, max_opt=MAX
         add_decision(id_rows, text_by_state, tok, state, f"{tag}_{r['sample_id'][:20]}",
                      {"type": "choice", "instructions": cfg["question"],
                       "criteria": {label: None for label in labels}, "label": labels[gold]},
-                     gold, metadata, max_ctx, max_opt)
+                     gold, metadata, max_ctx, max_opt, overflow, exclusions)
     manifest["counts"]["accepted_records"] = len(rows)
     return write_rows(out, id_rows, list(text_by_state.values()), manifest)
 
@@ -272,6 +278,10 @@ def main():
                     help="also emit the explicitly legacy/proxy SciFact ordinal mapping")
     ap.add_argument("--max-ctx", type=int, default=MAX_CTX)
     ap.add_argument("--max-opt", type=int, default=MAX_OPT)
+    ap.add_argument("--overflow", choices=("error", "exclude", "truncate"),
+                    default="exclude",
+                    help="input over budget: fail, exclude with record, or "
+                         "truncate with recorded counts")
     args = ap.parse_args()
     if args.bench == "scifact" and not args.out_prefix:
         ap.error("--out-prefix is required for scifact")
@@ -281,7 +291,8 @@ def main():
     rng = random.Random(args.seed)
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
-    options = {"max_ctx": args.max_ctx, "max_opt": args.max_opt, "seed": args.seed}
+    options = {"max_ctx": args.max_ctx, "max_opt": args.max_opt, "seed": args.seed,
+               "overflow": args.overflow}
     if args.bench == "gpqa":
         conv_gpqa(args.src, args.out, tok, rng, **options)
     elif args.bench == "scifact":

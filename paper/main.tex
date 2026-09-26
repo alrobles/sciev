@@ -293,6 +293,56 @@ elite accuracy loss per type and either improved SciFact or at least
 three points of GPQA-main improvement. These observations support
 retaining $c_*$ among the tested candidates, not rejecting DAPT in general.
 
+\subsection{Matched frozen/adapted comparison on complete evidence}
+The candidate screen above confounds adaptation with head optimization
+and uses silently truncated contexts. The \texttt{systemone-v2} battery
+removes both problems: identical recipe \texttt{scientific-v1}
+(spanpool, canonical order, per-type heads, $3\times10^{-4}$ head LR,
+warmup 200, accumulation 1, seed 7331), group-disjoint splits, and
+evidence that either fits whole or is excluded with a recorded reason
+(8{,}576 long-context exclusions; median passage 783 tokens).
+
+\begin{table}[htbp]
+\centering\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{elite (complete evidence)} & \multicolumn{2}{c}{GPQA} &
+   \multicolumn{2}{c}{SciFact} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+arm & choice & noul & score & main & diamond & noul & choice \\
+\midrule
+frozen (\texttt{fr})     & \textbf{0.9799} & \textbf{0.9308} & \textbf{0.8957} &
+  \textbf{0.2789} & 0.3005 & 0.4639 & 0.5000 \\
+adapted g5000 (\texttt{da}) & 0.9598 & 0.9200 & 0.7521 &
+  0.2676 & \textbf{0.3057} & \textbf{0.7289} & \textbf{0.5151} \\
+\bottomrule
+\end{tabular}
+\caption{Accuracies of the matched frozen/adapted arms on
+\texttt{systemone-v2} (identical head recipe, seed, splits, and
+evaluation). Elite $n$: 448/1{,}200/1{,}218; GPQA main/diamond:
+441/193; SciFact: 332 per task. Dev-fitted temperatures: choice
+3.39/2.17, noul 1.49/2.78, score 1.27/1.76 (fr/da). Adaptation helps
+out-of-distribution verification (SciFact noul $+26.5$ points, from
+below its 0.60 majority baseline) but degrades in-distribution ordinal
+scoring ($-14.4$ points) and elite accuracy slightly. This isolates the
+backbone effect the candidate screen could not, and reverses the sign
+of the SciFact result observed in the unmatched comparison.}
+\label{tab:matched}
+\end{table}
+
+Calibration (dev-fitted temperature, frozen at evaluation) is strong
+in-distribution: elite ECE is 0.0167/0.0189/0.0118 for choice/noul/score
+under the frozen arm, versus 0.0164/0.0163/0.0823 under the adapted arm.
+On SciFact noul the frozen arm is below its own majority baseline
+(0.4639 versus 0.5964), while the adapted arm reaches 0.7289 with
+macro-F1 0.7289 and ECE 0.1607: domain adaptation transfers to an
+external verification regime it was never trained on. The cost is
+concentrated in rubric scoring, where adaptation drops accuracy to
+0.7521 (argmax MAE 0.2479 versus 0.1043) and worsens calibration. The
+matched design therefore rejects a uniform verdict in either direction:
+adaptation effects are task-dependent, not monotone.
+
 \section{Discussion}
 
 \paragraph{What a decision layer buys.}
@@ -315,9 +365,12 @@ Table~\ref{tab:candidates} supports retaining the frozen heads for this
 release: the adapted candidates do not satisfy the transfer gate despite
 some improved elite metrics. It does not establish that domain adaptation
 necessarily sacrifices generalization, nor that a domain-native backbone
-would avoid that trade-off. A controlled follow-up should hold head
-optimization fixed, restore full training state across interruptions,
-repeat seeds, and reserve untouched evaluation data after candidate
+would avoid that trade-off. The matched comparison in
+Table~\ref{tab:matched} holds head optimization fixed on
+\texttt{systemone-v2} and shows the causal effect is task-dependent:
+adaptation transfers to external verification while degrading ordinal
+scoring. A fuller study should still repeat seeds, restore optimizer
+state across interruptions, and reserve untouched evaluation data after
 selection.
 
 \paragraph{Relation to the ecosystem.}

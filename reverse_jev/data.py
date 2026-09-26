@@ -250,13 +250,22 @@ def exclude_record(exclusions, record, reason, **details):
 
 
 def add_decision(id_rows, text_by_state, tok, state, qid, question, gold, metadata,
-                 max_ctx=640, max_opt=120):
-    from .decisions import encode_question, validate_decision_row
+                 max_ctx=640, max_opt=120, overflow="error", exclusions=None):
+    from .decisions import InputOverflow, encode_question, validate_decision_row
+    if overflow not in ("error", "exclude", "truncate"):
+        raise ValueError("overflow must be error, exclude, or truncate")
     try:
-        encoded = encode_question(tok, state, question, max_ctx=max_ctx, max_opt=max_opt, overflow="error")
+        encoded = encode_question(tok, state, question, max_ctx=max_ctx, max_opt=max_opt,
+                                  overflow="error" if overflow == "exclude" else overflow)
         decision_id = hashlib.sha256(stable_json(encoded).encode("utf-8")).hexdigest()
         qid = f"{qid}_{decision_id[:16]}"
         row = validate_decision_row({**metadata, **encoded, "gold": gold, "qid": qid, "decision_id": decision_id})
+    except InputOverflow:
+        if overflow != "exclude":
+            raise
+        exclude_record(exclusions, metadata, "input_overflow",
+                       qid=qid, kind=question.get("type"))
+        return None
     except ValueError as exc:
         raise ValueError(f"{qid}: {exc}") from exc
     text_meta = {**metadata, "encoding": row["encoding"], "schema_version": row["schema_version"]}

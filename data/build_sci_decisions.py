@@ -211,7 +211,8 @@ def _cross_candidates(recs, record, positives, rng, tag):
     return candidates
 
 
-def build(recs, tok, rng, tag, *, exclusions=None, max_ctx=MAX_CTX, max_opt=MAX_OPT):
+def build(recs, tok, rng, tag, *, exclusions=None, max_ctx=MAX_CTX, max_opt=MAX_OPT,
+          overflow="error"):
     recs = prepare_records(recs, exclusions)
     if any(r.get("split", tag) != tag for r in recs):
         raise ValueError("negative pools must contain only records from the requested split")
@@ -256,7 +257,8 @@ def build(recs, tok, rng, tag, *, exclusions=None, max_ctx=MAX_CTX, max_opt=MAX_
             meta = dict(metadata, label_status="heuristic", negative_provenance=[
                 dict(c["provenance"], option_key=c["answer"]) for c in opts])
             add_decision(id_rows, text_by_state, tok, state, f"choice_{identity}",
-                         question, answers.index(gold_a), meta, max_ctx, max_opt)
+                         question, answers.index(gold_a), meta, max_ctx, max_opt,
+                         overflow, exclusions)
         else:
             exclude_record(exclusions, r, "insufficient_unique_distractors", split=tag, kind="choice",
                            available=len(distr), required=3)
@@ -280,12 +282,12 @@ def build(recs, tok, rng, tag, *, exclusions=None, max_ctx=MAX_CTX, max_opt=MAX_
                         label_status="source_reference" if ok else "heuristic")
             add_decision(id_rows, text_by_state, tok, st2, f"noul_{identity}_{j}",
                          {"type": "noul", "instructions": INSTR_NOUL, "label": ok},
-                         0 if ok else 1, meta, max_ctx, max_opt)
+                         0 if ok else 1, meta, max_ctx, max_opt, overflow, exclusions)
             add_decision(id_rows, text_by_state, tok, st2, f"score_{identity}_{j}",
                          {"type": "score", "instructions": "Rate the proposed answer.",
                           "criteria": SCORE_LEGEND, "label": sc}, sc,
                          dict(meta, label_status="heuristic_proxy", rubric_provenance="synthetic_strategy"),
-                         max_ctx, max_opt)
+                         max_ctx, max_opt, overflow, exclusions)
     return id_rows, list(text_by_state.values())
 
 
@@ -310,6 +312,10 @@ def main():
                     help="applies to elite and raw inputs; lexical consistency is not semantic verification")
     ap.add_argument("--max-ctx", type=int, default=MAX_CTX)
     ap.add_argument("--max-opt", type=int, default=MAX_OPT)
+    ap.add_argument("--overflow", choices=("error", "exclude", "truncate"),
+                    default="exclude",
+                    help="input over budget: fail, exclude with record, or "
+                         "truncate with recorded counts")
     args = ap.parse_args()
     if bool(args.qa) == bool(args.qa_raw):
         ap.error("provide exactly one of --qa or --qa-raw")
@@ -339,7 +345,8 @@ def main():
     files = {}
     for tag, recs in splits.items():
         id_rows, text_rows = build(recs, tok, random.Random(f"{args.seed}:{tag}"), tag,
-                                   exclusions=exclusions, max_ctx=args.max_ctx, max_opt=args.max_opt)
+                                   exclusions=exclusions, max_ctx=args.max_ctx,
+                                   max_opt=args.max_opt, overflow=args.overflow)
         for kind in ("choice", "noul", "score"):
             files[out / f"sci_{kind}_{tag}.jsonl"] = [r for r in id_rows if r["kind"] == kind]
         files[out / f"sci_decisions_{tag}_text.jsonl"] = text_rows
@@ -347,6 +354,7 @@ def main():
                  split_groups={tag: len({r["split_group"] for r in rs}) for tag, rs in splits.items()})
     manifest = {"builder": "build_sci_decisions", "seed": args.seed, "inputs": input_fingerprints(paths),
                 "tokenizer": args.tokenizer, "max_ctx": args.max_ctx, "max_opt": args.max_opt,
+                "overflow": args.overflow,
                 "filter_policy": args.filter_policy, "filter_semantics": "lexical consistency, not semantic proof",
                 "split_unit": "connected source identifiers and normalized passage content",
                 "split_fractions": {"dev": args.dev_frac, "eval": args.eval_frac}, "requested_counts": counts,

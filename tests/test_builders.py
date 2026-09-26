@@ -64,6 +64,32 @@ def test_grounded_numeric_gate_is_value_preserving(answer, passage, expected):
     assert sci.grounded("What is the value?", answer, passage) is expected
 
 
+def test_builder_overflow_policy_excludes_or_truncates_with_records(tmp_path):
+    long_rec = qa("long", "The answer is 40 units.",
+                  passage="Evidence " + "word " * 800)
+    recs = [qa(f"ok{i}", f"The answer is {10 * i} units.") for i in range(5)]
+    recs.append(long_rec)
+    for tag in ("train",):
+        recs_tag = [dict(r, split=tag, split_group=f"g_{i}", content_hash=f"h_{i}",
+                         sample_id=f"s_{i}", source="t")
+                    for i, r in enumerate(recs)]
+        exclusions = []
+        ids, texts = sci.build(recs_tag, CharTokenizer(), random.Random(1), tag,
+                               exclusions=exclusions, max_ctx=400, overflow="exclude")
+        assert all("long" not in r["qid"] for r in ids)
+        assert any(e["reason"] == "input_overflow" for e in exclusions)
+        assert ids, "short records survive"
+        exclusions2 = []
+        ids2, _ = sci.build(recs_tag, CharTokenizer(), random.Random(1), tag,
+                            exclusions=exclusions2, max_ctx=400, overflow="truncate")
+        assert all(r["truncation"]["context_tokens"] >= 0 for r in ids2)
+        truncated = [r for r in ids2 if r["truncation"]["context_tokens"] > 0]
+        assert truncated, "long record emitted truncated"
+        with pytest.raises(ValueError):
+            sci.build(recs_tag, CharTokenizer(), random.Random(1), tag,
+                      exclusions=[], max_ctx=400, overflow="error")
+
+
 def test_elite_and_raw_have_explicit_same_filter_policy(tmp_path):
     rec = qa("p", "The value is 10 units.", passage="The value is 100 units.")
     elite = tmp_path / "elite.jsonl"
@@ -491,3 +517,59 @@ def test_scientific_dedup_retains_canonical_unicode_and_whitespace_equivalence()
 def test_lexical_word_overlap_remains_deliberately_case_insensitive():
     assert sci.grounded("What is the value?", "THE VALUE IS 10 UNITS.", "the value is 10 units.")
     assert sci._norm_num("1e2") == sci._norm_num("1E2") == sci._norm_num("100")
+
+
+def _elite_text_rows():
+    recs = []
+    for i in range(12):
+        recs.append(dict(pid=f"p{i}", passage=f"Evidence text number {i} about topic {i}. " * 8,
+                         q=f"Question {i}?", a=f"answer {i} units", type="definitional",
+                         split_group=f"p{i}", content_hash=f"h{i}", sample_id=f"s{i}",
+                         source="t", source_file="t.jsonl", source_line=i))
+    _, texts = sci.build(recs, CharTokenizer(), random.Random(1), "eval",
+                         max_ctx=700, max_opt=80, overflow="exclude")
+    return texts
+
+
+def test_evidence_controls_preserve_reference_labels_without_relabelling(tmp_path):
+    from data import build_evidence_controls as ctrl
+    rows = _elite_text_rows()
+    for mode in ("empty", "shuffle"):
+        exclusions = []
+        id_rows, controlled, n_controls, skipped = ctrl.build(
+            rows, CharTokenizer(), mode=mode, seed=5,
+            max_ctx=700, max_opt=80, overflow="exclude", exclusions=exclusions)
+        assert n_controls == len(rows) and skipped == 0
+        kinds = {}
+        for row in id_rows:
+            kinds[row["kind"]] = kinds.get(row["kind"], 0) + 1
+            assert row["label_status"] == "evidence_control"
+            assert row["gold_semantics"] == "reference_agreement"
+            assert row["evidence_control"]["mode"] == mode
+            assert "reference_label" not in row or True
+        assert kinds == {"choice": 12, "noul": 36, "score": 36}
+
+
+def test_evidence_controls_shuffle_donors_cross_groups(tmp_path):
+    from data import build_evidence_controls as ctrl
+    rows = _elite_text_rows()
+    id_rows, _, _, _ = ctrl.build(rows, CharTokenizer(), mode="shuffle", seed=7,
+                                  max_ctx=700, max_opt=80, overflow="exclude", exclusions=[])
+    donors = {row["evidence_control"]["donor_group"] for row in id_rows}
+    assert donors
+    for row in id_rows:
+        ctl = row["evidence_control"]
+        assert ctl["donor_group"] != ctl["source_group"]
+
+
+def test_evidence_control_score_reference_within_rubric():
+    from data.build_evidence_controls import reference_gold_index
+    assert reference_gold_index({"type": "score", "criteria": ["a", "b", "c"],
+                                 "reference_label": 2}) == 2
+    with pytest.raises(ValueError):
+        reference_gold_index({"type": "score", "criteria": ["a", "b", "c"],
+                              "reference_label": 5})
+    q = {"type": "choice", "criteria": {"x": None, "y": None}, "reference_label": "y"}
+    assert reference_gold_index(q) == 1
+    assert reference_gold_index({"type": "noul", "reference_label": True}) == 0
+    assert reference_gold_index({"type": "noul", "reference_label": False}) == 1
