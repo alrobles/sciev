@@ -158,6 +158,66 @@ conteo medido de tokens únicos sin padding. Seleccionar logits antes del
 cast reduce memoria, pero no se verificó que DAPT bs16 quepa en 48GB.
 `sci_llada6.slurm` acepta `DAPT`/`TAG` por env (`--export=ALL,...`).
 
+## 7b. Fase pareada `systemone-v2` — actualizado 2026-09-26
+
+El screening anterior confundía backbone con hiperparámetros de head y
+truncaba contextos en silencio. La fase pareada corrige ambos:
+
+| job | estado | qué produce |
+|---|---|---|
+| `sci_aligned_v2` (30405852) | ✅ DONE 1m50s | batería `systemone-v2` a max_ctx=960, `--overflow exclude` con razones registradas: elite 1307/3649/3685 train, 300/814/827 dev, 448/1200/1218 eval; GPQA 441+193; SciFact 332×2. 8,576 exclusiones `input_overflow` (p50=783, p95=1858 tokens de pasaje) |
+| `sci_llada6` fr_matched (30405856) | ✅ DONE 27m | heads `fr_matched_s7331_*`, DAPT=none |
+| `sci_llada6` da_matched (30405857) | ✅ DONE 28m | heads `da_matched_s7331_*` sobre lora-final |
+| `sci_controls` fr (30486821) | ✅ DONE 15m | evals empty/shuffle sobre fr_* |
+| `sci_controls` da (30486822) | ✅ DONE 17m | evals empty/shuffle sobre da_* |
+
+### Comparación pareada (misma receta scientific-v1, seed 7331, datos v2)
+
+| eval | fr (frozen) | da (g5000) | Δ |
+|---|---:|---:|---:|
+| elite choice | **0.9799** | 0.9598 | −2.0pt |
+| elite noul | **0.9308** | 0.9200 | −1.1 |
+| elite score | **0.8957** | 0.7521 | −14.4 |
+| GPQA main | **0.2789** | 0.2676 | −1.1 |
+| GPQA diamond | 0.3005 | **0.3057** | +0.5 |
+| SciFact noul | 0.4639 | **0.7289** | **+26.5** |
+| SciFact choice | 0.5000 | **0.5151** | +1.5 |
+
+ECE elite (temp dev-only): fr 0.0167/0.0189/0.0118 vs da 0.0164/0.0163/0.0823.
+
+**Hallazgos:**
+1. Evidencia completa importa: elite choice 0.98 vs 0.87 con truncado silencioso.
+2. El resultado SciFact se **invierte** respecto del screening: con protocolo
+   pareado, DAPT saca al modelo de bajo su majority baseline (0.46→0.73).
+   La conclusión anterior era un artefacto de diseño no controlado.
+3. El efecto DAPT es dependiente de tarea: ayuda verificación OOD, daña
+   scoring ordinal y calibración de score (ECE 0.082 vs 0.012).
+4. fr noul en SciFact cae bajo el majority baseline (0.46 vs 0.60): el
+   backbone congelado no verifica fuera de dominio; el adaptado sí.
+
+`data/build_evidence_controls.py` genera controles desde
+`sci_decisions_eval_text.jsonl` (mismo encoding v2). Las filas de control
+llevan `label_status=evidence_control` y `gold_semantics=reference_agreement`:
+el `gold` es la posición de la respuesta de referencia original — NO una
+nueva verdad sobre la evidencia alterada. empty: 448/1200/1218; shuffle:
+447/1146/1172 (101 overflow de donantes largos, registradas).
+
+### Controles de evidencia (agreement-with-reference)
+
+| kind | fr empty | fr shuffle | da empty | da shuffle | azar |
+|---|---:|---:|---:|---:|---:|
+| choice | 0.875 | 0.873 | 0.806 | 0.785 | ~0.25 |
+| noul | 0.810 | 0.669 | 0.807 | 0.667 | ~0.60 |
+| score | 0.575 | 0.385 | 0.555 | 0.430 | ~0.34 |
+
+**Hallazgo clave:** choice es ~87% resoluble SIN el pasaje — las opciones
+delatan la respuesta (gold = texto del teacher coherente con la pregunta;
+distractores = perturbaciones numéricas o respuestas de otro tema). score
+sí usa evidencia (cae a azar bajo shuffle); noul cae a su prior de
+mayoría. Los números elite pareados son cota superior de capacidad
+*grounded*; para afirmar grounding en choice hacen falta distractores
+indistinguibles sin pasaje. Paper: `tab:matched` + `tab:controls`.
+
 ## 8. Siguiente
 
 1. Heads seleccionados: **`c_*`**, sin cambios respecto de v0.1.

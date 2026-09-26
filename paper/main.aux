@@ -27,16 +27,19 @@
 \newlabel{tab:candidates}{{4}{5}{Candidate accuracies from the archived JSON reports. Elite sample sizes are 653/1{,}959/1{,}959 for choice/noul/score; public-benchmark sizes match Table~\ref {tab:public}. The frozen $c_*$ heads are retained for release. Head optimization differs between $c_*$ and the other rows, and bw1\_sr is an early-training, shorter-context control. Consequently, this table does not isolate adaptation, model size, or training duration as a cause of the differences}{table.4}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Accuracies of the matched frozen/adapted arms on \texttt  {systemone-v2} (identical head recipe, seed, splits, and evaluation). Elite $n$: 448/1{,}200/1{,}218; GPQA main/diamond: 441/193; SciFact: 332 per task. Dev-fitted temperatures: choice 3.39/2.17, noul 1.49/2.78, score 1.27/1.76 (fr/da). Adaptation helps out-of-distribution verification (SciFact noul $+26.5$ points, from below its 0.60 majority baseline) but degrades in-distribution ordinal scoring ($-14.4$ points) and elite accuracy slightly. This isolates the backbone effect the candidate screen could not, and reverses the sign of the SciFact result observed in the unmatched comparison.}}{5}{table.5}\protected@file@percent }
 \newlabel{tab:matched}{{5}{5}{Accuracies of the matched frozen/adapted arms on \texttt {systemone-v2} (identical head recipe, seed, splits, and evaluation). Elite $n$: 448/1{,}200/1{,}218; GPQA main/diamond: 441/193; SciFact: 332 per task. Dev-fitted temperatures: choice 3.39/2.17, noul 1.49/2.78, score 1.27/1.76 (fr/da). Adaptation helps out-of-distribution verification (SciFact noul $+26.5$ points, from below its 0.60 majority baseline) but degrades in-distribution ordinal scoring ($-14.4$ points) and elite accuracy slightly. This isolates the backbone effect the candidate screen could not, and reverses the sign of the SciFact result observed in the unmatched comparison}{table.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Evidence controls expose option-side leakage}{6}{subsection.4.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Evidence controls on the elite eval split ($n$ per cell 447--1{,}218; shuffle excludes 101 donor-overflow rows). Chance is $\sim $0.25/0.60/0.34 for choice/noul/score (noul majority prior). Controls are scored as agreement with the reference answer under altered evidence, \texttt  {label\_status=evidence\_control}.}}{6}{table.6}\protected@file@percent }
+\newlabel{tab:controls}{{6}{6}{Evidence controls on the elite eval split ($n$ per cell 447--1{,}218; shuffle excludes 101 donor-overflow rows). Chance is $\sim $0.25/0.60/0.34 for choice/noul/score (noul majority prior). Controls are scored as agreement with the reference answer under altered evidence, \texttt {label\_status=evidence\_control}}{table.6}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{6}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What a decision layer buys.}{6}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Backbone and head must be evaluated together.}{6}{section*.7}\protected@file@percent }
 \bibstyle{plain}
 \bibcite{llada}{1}
 \bibcite{gpqa}{2}
 \bibcite{scifact}{3}
 \bibcite{kumar}{4}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{6}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What a decision layer buys.}{6}{section*.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Backbone and head must be evaluated together.}{6}{section*.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Candidate selection is not a causal adaptation study.}{6}{section*.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Relation to the ecosystem.}{6}{section*.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Limitations}{6}{section.6}\protected@file@percent }
 \bibcite{corallike}{5}
+\@writefile{toc}{\contentsline {paragraph}{Candidate selection is not a causal adaptation study.}{7}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Relation to the ecosystem.}{7}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Limitations}{7}{section.6}\protected@file@percent }
 \gdef \@abspage@last{7}

@@ -343,6 +343,54 @@ concentrated in rubric scoring, where adaptation drops accuracy to
 matched design therefore rejects a uniform verdict in either direction:
 adaptation effects are task-dependent, not monotone.
 
+\subsection{Evidence controls expose option-side leakage}
+High accuracy alone does not prove that decisions condition on the
+supplied evidence. We therefore evaluate \emph{evidence controls}:
+empty (the evidence span removed) and shuffle (the span replaced by a
+donor passage from a different source group in the same split).
+Controls keep the original question and proposed answer and are scored
+for \emph{agreement with the reference answer}---not relabelled, since
+altered evidence has no valid ground truth. Agreement far above chance
+under destroyed evidence means the model decides without reading the
+evidence, whether through parametric recall or option-side cues.
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabular}{llrrr}
+\toprule
+arm & kind & original acc & empty agree & shuffle agree \\
+\midrule
+fr & choice & 0.9799 & 0.8750 & 0.8725 \\
+fr & noul   & 0.9308 & 0.8100 & 0.6693 \\
+fr & score  & 0.8957 & 0.5747 & 0.3848 \\
+\midrule
+da & choice & 0.9598 & 0.8058 & 0.7852 \\
+da & noul   & 0.9200 & 0.8067 & 0.6667 \\
+da & score  & 0.7521 & 0.5550 & 0.4300 \\
+\bottomrule
+\end{tabular}
+\caption{Evidence controls on the elite eval split ($n$ per cell
+447--1{,}218; shuffle excludes 101 donor-overflow rows). Chance is
+$\sim$0.25/0.60/0.34 for choice/noul/score (noul majority prior).
+Controls are scored as agreement with the reference answer under
+altered evidence, \texttt{label\_status=evidence\_control}.}
+\label{tab:controls}
+\end{table}
+
+The controls qualify the headline accuracies. Choice agreement under
+empty evidence is 0.87 (frozen): the task is largely solvable without
+the passage, because gold answers are teacher-written text that matches
+question phrasing while distractors are numeric perturbations or
+topically foreign answers. Noul falls to its majority prior under
+shuffled evidence, as it should. Score behaves as designed---agreement
+collapses toward chance under wrong evidence---and is the only task
+whose accuracy directly reflects evidence use. Both arms rely on
+option-side leakage similarly; adaptation does not fix it. The matched
+elite numbers should therefore be read as upper bounds on
+evidence-grounded accuracy, and the battery needs distractors that are
+indistinguishable without the passage before choice accuracy can be
+claimed as grounded.
+
 \section{Discussion}
 
 \paragraph{What a decision layer buys.}
