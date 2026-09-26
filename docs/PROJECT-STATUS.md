@@ -218,6 +218,40 @@ mayoría. Los números elite pareados son cota superior de capacidad
 *grounded*; para afirmar grounding en choice hacen falta distractores
 indistinguibles sin pasaje. Paper: `tab:matched` + `tab:controls`.
 
+### Pool estricto `--hard-choice` (data/sci_battery_hard)
+
+Solo same-passage swaps + perturbaciones numéricas (sin cross-passage).
+choice eval 448→303 filas (733 registros excluidos honestamente).
+
+| eval | fr | da |
+|---|---:|---:|
+| hard acc | 0.914 | 0.868 |
+| hard empty agree | 0.795 | 0.766 |
+| hard shuffle agree | 0.825 | 0.722 |
+
+Reduce leakage ~6-8pt pero no lo elimina: los swaps responden a OTRAS
+preguntas → aún distinguibles por coherencia q↔a. Hace falta teacher que
+genere distractores de la MISMA pregunta. da cae más bajo evidencia
+errónea (0.722 vs 0.825) → filtra mejor la evidencia (coherente con
+SciFact +26.5pt).
+
+### Multi-seed (seeds 7331-7333, jobs 30486874-877)
+
+| eval | fr mean±sd | da mean±sd |
+|---|---:|---:|
+| elite choice | 0.970±.017 | 0.961±.011 |
+| elite noul | 0.925±.006 | 0.913±.007 |
+| elite score | 0.859±.075 | 0.779±.109 |
+| GPQA main | 0.295±.014 | 0.288±.018 |
+| GPQA diamond | 0.307±.012 | 0.297±.011 |
+| SciFact noul | 0.483±.023 | **0.709±.020** |
+| SciFact choice | 0.479±.018 | 0.444±.062 |
+
+La ventaja DAPT en verificación SciFact es robusta (+22.6pt, sd~2);
+la pérdida en score es ruidosa (sd hasta ±.11 → el −14.4pt de una
+corrida era en parte fluctuación). Paper: `tab:matched` ahora reporta
+mean±sd.
+
 ## 8. Siguiente
 
 1. Heads seleccionados: **`c_*`**, sin cambios respecto de v0.1.

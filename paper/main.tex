@@ -303,8 +303,8 @@ evidence that either fits whole or is excluded with a recorded reason
 (8{,}576 long-context exclusions; median passage 783 tokens).
 
 \begin{table}[htbp]
-\centering\small
-\setlength{\tabcolsep}{3pt}
+\centering\scriptsize
+\setlength{\tabcolsep}{2.5pt}
 \begin{tabular}{lrrrrrrr}
 \toprule
  & \multicolumn{3}{c}{elite (complete evidence)} & \multicolumn{2}{c}{GPQA} &
@@ -312,36 +312,40 @@ evidence that either fits whole or is excluded with a recorded reason
 \cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
 arm & choice & noul & score & main & diamond & noul & choice \\
 \midrule
-frozen (\texttt{fr})     & \textbf{0.9799} & \textbf{0.9308} & \textbf{0.8957} &
-  \textbf{0.2789} & 0.3005 & 0.4639 & 0.5000 \\
-adapted g5000 (\texttt{da}) & 0.9598 & 0.9200 & 0.7521 &
-  0.2676 & \textbf{0.3057} & \textbf{0.7289} & \textbf{0.5151} \\
+frozen (\texttt{fr})     & \textbf{0.970$\pm$.017} & \textbf{0.925$\pm$.006} & \textbf{0.859$\pm$.075} &
+  \textbf{0.295$\pm$.014} & \textbf{0.307$\pm$.012} & 0.483$\pm$.023 & \textbf{0.479$\pm$.018} \\
+adapted g5000 (\texttt{da}) & 0.961$\pm$.011 & 0.913$\pm$.007 & 0.779$\pm$.109 &
+  0.288$\pm$.018 & 0.297$\pm$.011 & \textbf{0.709$\pm$.020} & 0.444$\pm$.062 \\
 \bottomrule
 \end{tabular}
-\caption{Accuracies of the matched frozen/adapted arms on
-\texttt{systemone-v2} (identical head recipe, seed, splits, and
-evaluation). Elite $n$: 448/1{,}200/1{,}218; GPQA main/diamond:
-441/193; SciFact: 332 per task. Dev-fitted temperatures: choice
-3.39/2.17, noul 1.49/2.78, score 1.27/1.76 (fr/da). Adaptation helps
-out-of-distribution verification (SciFact noul $+26.5$ points, from
-below its 0.60 majority baseline) but degrades in-distribution ordinal
-scoring ($-14.4$ points) and elite accuracy slightly. This isolates the
-backbone effect the candidate screen could not, and reverses the sign
-of the SciFact result observed in the unmatched comparison.}
+\caption{Accuracy (mean $\pm$ sd over seeds 7331--7333) of the matched
+frozen/adapted arms on \texttt{systemone-v2} (identical head recipe,
+splits, and evaluation per seed). Elite $n$: 448/1{,}200/1{,}218; GPQA
+main/diamond: 441/193; SciFact: 332 per task. Dev-fitted temperatures
+for seed 7331: choice 3.39/2.17, noul 1.49/2.78, score 1.27/1.76
+(fr/da). Adaptation robustly improves out-of-distribution verification
+(SciFact noul $+22.6$ points, consistent across seeds, from below the
+0.60 majority baseline) at a noisy cost to in-distribution ordinal
+scoring. This isolates the backbone effect the candidate screen could
+not, and reverses the sign of the SciFact result observed in the
+unmatched comparison.}
 \label{tab:matched}
 \end{table}
 
 Calibration (dev-fitted temperature, frozen at evaluation) is strong
-in-distribution: elite ECE is 0.0167/0.0189/0.0118 for choice/noul/score
-under the frozen arm, versus 0.0164/0.0163/0.0823 under the adapted arm.
-On SciFact noul the frozen arm is below its own majority baseline
-(0.4639 versus 0.5964), while the adapted arm reaches 0.7289 with
-macro-F1 0.7289 and ECE 0.1607: domain adaptation transfers to an
-external verification regime it was never trained on. The cost is
-concentrated in rubric scoring, where adaptation drops accuracy to
-0.7521 (argmax MAE 0.2479 versus 0.1043) and worsens calibration. The
-matched design therefore rejects a uniform verdict in either direction:
-adaptation effects are task-dependent, not monotone.
+in-distribution under seed 7331: elite ECE is 0.0167/0.0189/0.0118 for
+choice/noul/score under the frozen arm, versus 0.0164, 0.0163, and
+0.0823 under the adapted arm. On SciFact noul the frozen arm sits below its
+own majority baseline (0.483 mean versus 0.5964), while the adapted arm
+reaches 0.709 mean accuracy (macro-F1 0.7289, ECE 0.1607 at seed 7331):
+domain adaptation transfers to an external verification regime it was
+never trained on. The cost concentrates in rubric scoring, where
+adaptation drops seed-7331 accuracy to 0.7521 (argmax MAE 0.2479 versus
+0.1043) with worse calibration---though the three-seed spread
+($\pm$0.11) shows this gap fluctuates across runs. The matched design
+therefore rejects a uniform verdict in either direction: adaptation
+effects are task-dependent, not monotone, and the verification gain is
+the most robust difference observed.
 
 \subsection{Evidence controls expose option-side leakage}
 High accuracy alone does not prove that decisions condition on the
@@ -390,6 +394,18 @@ elite numbers should therefore be read as upper bounds on
 evidence-grounded accuracy, and the battery needs distractors that are
 indistinguishable without the passage before choice accuracy can be
 claimed as grounded.
+
+\paragraph{Stricter distractors reduce but do not remove leakage.}
+Rebuilding the choice battery with a strict pool (\texttt{--hard-choice}:
+same-passage swaps and numeric perturbations only, no cross-passage
+fill; 733 records honestly excluded as untestable, $n=303$ eval)
+changes accuracy to 0.914 (fr) / 0.868 (da) and empty-evidence
+agreement to 0.795 / 0.766. The residual shows that same-passage
+swaps---answers to \emph{other} questions---remain separable by
+question--answer coherence alone; fully grounded choice requires
+confounders to the \emph{same} question. Under shuffled evidence the
+adapted arm agrees less than the frozen arm (0.722 versus 0.825),
+consistent with better evidence filtering, matching its SciFact gain.
 
 \section{Discussion}
 
