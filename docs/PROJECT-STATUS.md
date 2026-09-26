@@ -52,7 +52,7 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | 6 | Benchmarks externos (GPQA, SciFact, clasificación) | ✅ |
 | 7 | Contraste bidireccional con Jev | ✅ — interno completo |
 | 8 | DAPT-LoRA sobre corpus de papers | ✅ `lora-final` = 5000 steps (~82M tokens, resume g2000) |
-| 9 | Heads `da_*` sobre backbone adaptado + re-eval | 🔄 `dag_*` (g2000) + `da_*` (lora-final) encolados |
+| 9 | Heads `da_*` sobre backbone adaptado + re-eval | ✅ hecho — **DAPT no supera criterio → release = `c_*`** |
 | 10 | Baseline ecoreasoner | ✅ `eb_*` sobre bw1_sr — backbone en azar (ver §5) |
 | 11 | Paper arXiv | 🔄 `paper/main.tex` skeleton compilable |
 
@@ -111,9 +111,29 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | `dapt_llada` (30252050) | ⏹ TIMEOUT ~3100/6000 | `runs/dapt/lora-g2000` — 6000 steps (9.5h) nunca cupieron en sixhour |
 | `dapt_llada_a/_l` resubmits | ❌ OOM | a40/l40 (48GB): `logits.float()` = [16,1024,126k] fp32 ~8.3GB de pico; además no había resume — habrían reiniciado de cero |
 | `dapt_llada_r` (30360611) | ✅ DONE 4h49m | resume g2000→5000 → `runs/dapt/lora-final` (ema ~5.49) |
-| `sci_llada6` TAG=dag (30360612) | ⏳ PD pro6000 | heads `dag_*` sobre **lora-g2000** — señal DAPT temprana |
-| `sci_llada6` TAG=da (30402330) | ⏳ PD pro6000 | heads `da_*` sobre **lora-final** — candidato release |
+| `sci_llada6` TAG=dag (30402364, a100) | ✅ DONE 38m | heads `dag_*` sobre lora-g2000 |
+| `sci_llada6` TAG=da (30402365, a100) | ✅ DONE 38m | heads `da_*` sobre lora-final |
 | `sci_eco` (30360632) | ✅ DONE 29m | baseline `eb_*` sobre bw1_sr (MdLMMoE 1.4B propio) |
+
+### Comparación DAPT vs frozen (elite/GPQA/SciFact acc)
+
+| eval | c_* frozen | dag g2000 | da g5000 | veredicto |
+|---|---:|---:|---:|---|
+| elite choice | 0.870 | 0.879 | **0.884** | DAPT +1.4pt ✓ |
+| elite noul | 0.783 | 0.779 | 0.756 | da −2.7pt |
+| elite score | 0.608 | 0.598 | 0.593 | −1pt |
+| GPQA main | 0.315 | 0.281 | 0.259 | −5.6pt ✗ |
+| GPQA diamond | 0.328 | 0.268 | 0.242 | −8.6pt ✗ |
+| SciFact noul | 0.853 | 0.812 | 0.724 | **−13pt** ✗ |
+| SciFact score | 0.624 | 0.515 | 0.500 | −12pt ✗ |
+| elite choice auto5 | 0.807 | 0.839 | 0.810 | DAPT ok |
+| elite noul auto5 | 0.278 | 0.413 | 0.327 | DAPT ok |
+
+**Criterio sprint: elite −1pt max Y (SciFact↑ O GPQA +3pt) → NO cumple.**
+DAPT ayuda in-distribution (elite choice/auto5) pero degrada la
+transferencia externa — mismo patrón del hallazgo #4 (domain-shift).
+Release v0.1 = heads `c_*` sobre LLaDA-8B congelado; DAPT queda como
+experimento documentado (también es resultado para el paper).
 
 Baseline eb_* (bw1_sr, ventana 768→ctx≤384): elite 0.280/0.667/0.334,
 GPQA 0.266/0.283, SciFact 0.594/0.300 — choice y score en el azar;
@@ -128,13 +148,10 @@ masked-select en bf16 antes del cast fp32 (~8 GiB menos de pico → cabe en
 
 ## 8. Siguiente
 
-1. Cuando `dag_*` evals caigan → comparar vs `c_*` (criterio: elite no baja
-   >1pt Y SciFact sube O GPQA +3pts) — decide si g2000 ya basta
-2. Cuando `lora-final` (g5000) caiga → `sbatch scripts/sci_llada6.slurm`
-   (TAG=da default) → decisión final de heads para release
-3. Baseline heads sobre ecoreasoner `bw1_sr`+`sft_moe_v2` (16 capas →
-   `--r2-layers=-1,-5,-9,-13`)
-4. Tag v0.1 + release público GitHub (repo ya renombrado `sciev-devel`,
-   model card + README listos)
-5. arXiv: paper tiene intro/battery/discussion; falta Tabla 3 con da_*
-6. Decidir venue post-arXiv (workshop ML vs MEE eco)
+1. ~~Decisión de heads~~ → **release = `c_*`** (DAPT documentado, §7)
+2. Tag v0.1 + release público GitHub (repo ya renombrado `sciev-devel`,
+   model card + README listos) — copiar `c_*/decision.pt` a release/HF
+3. Paper: Tabla 3 con c_* (release) + filas dag/da/eb como experimentos;
+   discusión del resultado negativo DAPT (transferencia vs in-domain)
+4. arXiv submission
+5. Decidir venue post-arXiv (workshop ML vs MEE eco)
