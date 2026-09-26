@@ -51,9 +51,9 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | 5 | Fase B datos (sci_battery_v2, 30×) | ✅ — descubrió domain-shift |
 | 6 | Benchmarks externos (GPQA, SciFact, clasificación) | ✅ |
 | 7 | Contraste bidireccional con Jev | ✅ — interno completo |
-| 8 | DAPT-LoRA sobre corpus de papers | 🔄 `dapt_llada_r` resume g2000→5000 (ver §7) |
-| 9 | Heads `da_*` sobre backbone adaptado + re-eval | 🔄 `sci_llada6` (TAG=dag sobre g2000) encolado |
-| 10 | Baseline ecoreasoner (bw1_sr + sft lora) | ⏳ pendiente |
+| 8 | DAPT-LoRA sobre corpus de papers | ✅ `lora-final` = 5000 steps (~82M tokens, resume g2000) |
+| 9 | Heads `da_*` sobre backbone adaptado + re-eval | 🔄 `dag_*` (g2000) + `da_*` (lora-final) encolados |
+| 10 | Baseline ecoreasoner | ✅ `eb_*` sobre bw1_sr — backbone en azar (ver §5) |
 | 11 | Paper arXiv | 🔄 `paper/main.tex` skeleton compilable |
 
 ## 5. Resultados consolidados
@@ -110,9 +110,16 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | `bench_eval` | ✅ DONE | tabla completa benchmarks públicos |
 | `dapt_llada` (30252050) | ⏹ TIMEOUT ~3100/6000 | `runs/dapt/lora-g2000` — 6000 steps (9.5h) nunca cupieron en sixhour |
 | `dapt_llada_a/_l` resubmits | ❌ OOM | a40/l40 (48GB): `logits.float()` = [16,1024,126k] fp32 ~8.3GB de pico; además no había resume — habrían reiniciado de cero |
-| `dapt_llada_r` (30360611) | 🔄 RUNNING pro6000 | resume `--resume lora-g2000 --start-step 2000 --steps 5000` → `lora-final` (~4.8h, ~82M tokens totales) |
-| `sci_llada6` TAG=dag (30360612) | ⏳ PD | heads `dag_*` sobre **lora-g2000** + eval GPQA/SciFact/elite — señal DAPT temprana |
-| baseline ecoreasoner | ⏳ pendiente | punto cero de trayectoria backbone |
+| `dapt_llada_r` (30360611) | ✅ DONE 4h49m | resume g2000→5000 → `runs/dapt/lora-final` (ema ~5.49) |
+| `sci_llada6` TAG=dag (30360612) | ⏳ PD pro6000 | heads `dag_*` sobre **lora-g2000** — señal DAPT temprana |
+| `sci_llada6` TAG=da (30402330) | ⏳ PD pro6000 | heads `da_*` sobre **lora-final** — candidato release |
+| `sci_eco` (30360632) | ✅ DONE 29m | baseline `eb_*` sobre bw1_sr (MdLMMoE 1.4B propio) |
+
+Baseline eb_* (bw1_sr, ventana 768→ctx≤384): elite 0.280/0.667/0.334,
+GPQA 0.266/0.283, SciFact 0.594/0.300 — choice y score en el azar;
+el conocimiento de LLaDA-8B es lo que carga a c_*. NOTA: `sft_moe_v2`
+NO se apila sobre bw1_sr (su lora.pt targetea HF LLaDA-MoE-7B
+`model.layers.*`, otra arquitectura; `models/` vacío en el cluster).
 
 Cambios 25-sep: `dapt.py` ganó `--resume`/`--start-step` (PeftModel.from_pretrained
 is_trainable + fast-forward de scheduler y corpus) y el CE ahora hace
