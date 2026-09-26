@@ -1,6 +1,6 @@
 [project]
 name = "sciev"
-version = "0.2.0"
+version = "0.2.1"
 description = "Sciev: typed decision heads on frozen masked-diffusion backbones with held-out calibration."
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
