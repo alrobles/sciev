@@ -1,9 +1,9 @@
 [project]
 name = "reverse-jev"
-version = "0.1.0"
-description = "Open System-One-style decision models on the EcoReasoner dLLM (MdLMMoE). Typed questions, calibrated probabilities, one forward pass."
+version = "0.1.1"
+description = "Sciev: typed decision heads on frozen masked-diffusion backbones with held-out calibration."
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 dependencies = [
     "torch>=2.0.0",
     "transformers>=4.45.0",

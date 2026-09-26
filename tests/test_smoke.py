@@ -145,6 +145,39 @@ def test_r2_kway_decisions():
         assert len(load_decisions_ids(fp)) == 5
 
 
+def test_r2_flip_tracks_option_identity():
+    from unittest.mock import patch
+
+    rows = [{"ctx": [1], "opts": [[10], [20], [30], [40]], "gold": 3}
+            for _ in range(20)]
+
+    def score_options(model, head, ids, mode, bounds, layers):
+        return torch.stack([ids[start].float() for start, _ in bounds])
+
+    with patch("reverse_jev.model.forward_feats", side_effect=score_options):
+        for canonical in (False, True):
+            out = rj_eval.eval_decisions_ids(
+                tiny_model(), None, rows, "cpu", mode="spanpool",
+                canonical=canonical)
+            assert out["acc"] == 1.0
+            assert out["flip_rate"] == 0.0
+
+
+def test_r2_flip_detects_positional_bias():
+    from unittest.mock import patch
+
+    rows = [{"ctx": [1], "opts": [[10], [20], [30], [40]], "gold": 0}
+            for _ in range(20)]
+    with patch("reverse_jev.model.forward_feats",
+               return_value=torch.tensor([4.0, 3.0, 2.0, 1.0])):
+        out = rj_eval.eval_decisions_ids(
+            tiny_model(), None, rows, "cpu", mode="spanpool")
+        assert out["flip_rate"] > 0.0
+        canonical = rj_eval.eval_decisions_ids(
+            tiny_model(), None, rows, "cpu", mode="spanpool", canonical=True)
+        assert canonical["flip_rate"] == 0.0
+
+
 def test_metrics():
     # perfectly calibrated: stated confidence equals observed accuracy
     assert abs(rj_eval.ece([1.0, 1.0, 0.0, 0.0], [1, 1, 0, 0])) < 0.01

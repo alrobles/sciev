@@ -1,6 +1,14 @@
-# PROJECT STATUS — reverse-jev (open System-One decision model)
+# PROJECT STATUS — Sciev (open System-One decision model)
 
-**Fecha**: 2026-09-20 · **Autor**: Devin (sesión de desarrollo)
+**Registro inicial**: 2026-09-20 · **Auditoría de release**: v0.1.1
+
+Los valores verificados y hashes de los 32 reportes están en
+`paper/results.json`; sustituyen transcripciones anteriores. v0.1 ya
+existe y conserva sus pesos/tag; v0.1.1 mantiene los mismos heads `c_*`.
+El repositorio sigue privado. La auditoría también retiró los flips
+históricos no canónicos, que comparaban posiciones sin alinear opciones,
+y documentó diferencias de entrenamiento que impiden atribuir causalmente
+todos los cambios de accuracy al DAPT.
 
 ## 1. Dónde vive el proyecto
 
@@ -29,7 +37,7 @@ reportes públicos, datos y modelos legalmente usables.
 ```
 LLaDA-8B-Instruct (congelado, bidireccional por construcción)
    └─ hidden states de capas {8,16,24,32}
-        └─ heads especialistas por tipo (~2M params)
+        └─ heads especialistas: choice 67.2M; noul/score 16.8M cada uno
              choice: AttnPoolHead (query → pooling sobre span de opción)
              noul:   MLP (mean-pool)
              score:  MLP + loss ordinal CORAL (P(y≥j) por BCE)
@@ -51,43 +59,45 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | 5 | Fase B datos (sci_battery_v2, 30×) | ✅ — descubrió domain-shift |
 | 6 | Benchmarks externos (GPQA, SciFact, clasificación) | ✅ |
 | 7 | Contraste bidireccional con Jev | ✅ — interno completo |
-| 8 | DAPT-LoRA sobre corpus de papers | ✅ `lora-final` = 5000 steps (~82M tokens, resume g2000) |
+| 8 | DAPT-LoRA sobre corpus de papers | ✅ `lora-final` = 5000 steps (≤81.9M token slots; warm start g2000) |
 | 9 | Heads `da_*` sobre backbone adaptado + re-eval | ✅ hecho — **DAPT no supera criterio → release = `c_*`** |
-| 10 | Baseline ecoreasoner | ✅ `eb_*` sobre bw1_sr — backbone en azar (ver §5) |
-| 11 | Paper arXiv | 🔄 `paper/main.tex` skeleton compilable |
+| 10 | Baseline ecoreasoner | ✅ `eb_*` sobre bw1_sr — checkpoint g20, control temprano (ver §7) |
+| 11 | Paper arXiv | 🔄 `paper/main.tex`: Tablas 3/4 auditadas, PDF verificado |
 
 ## 5. Resultados consolidados
 
 ### Sci battery elite (target interno)
 | modelo | choice | noul | score | flip | auto@5% choice |
 |---|---:|---:|---:|---:|---:|
-| baseline | 0.775 | 0.707 | 0.522 | 0.76 | 0.37 |
-| **c_\*** | **0.870** | **0.783** | **0.608** | **0.00** | **0.81** |
+| baseline | 0.775 | 0.707 | 0.522 | retirado | 0.37 |
+| **c_\*** | **0.8698** | **0.7825** | **0.6075** | **0.00** | **0.8070** |
 
-### Benchmarks públicos (eval-only)
-| benchmark | tipo | open (c_*) | ref. publicada |
+El flip del baseline requiere reevaluación con identidades alineadas.
+
+### Benchmarks públicos (reportes archivados, sin nuevos entrenamientos)
+| benchmark | tipo | c_* | n |
 |---|---|---:|---:|
-| GPQA main / diamond | choice | 0.315 / 0.328 | LLaDA techo ~0.33 |
-| SciFact dev | noul | **0.853** | ~0.89 (SOTA-decision) |
-| SciFact dev | score | 0.624 | ~0.70 |
-| Enron spam (K=2) | choice | 0.752 | 0.987 |
-| **SST-2 (K=2)** | choice | **0.930** | 0.957 |
-| AG News (K=4) | choice | 0.854 | 0.913 |
-| Banking77 (K=77) | choice | 0.229 | 0.760 |
+| GPQA main / diamond | choice | 0.3125 / 0.3182 | 448 / 198 |
+| SciFact dev | noul | **0.8500** | 340 |
+| SciFact dev | score | 0.6294 | 340 |
+| Enron spam (K=2) | choice | 0.7510 | 2000 |
+| SST-2 (K=2) | choice | **0.9300** | 872 |
+| AG News (K=4) | choice | 0.8537 | 7600 |
+| Banking77 (K=77) | choice | 0.2289 | 3080 |
 
 ### Hallazgos
-1. **Canonical ordering**: flip 0.77→0.00 exacto y gratis; el promedio
-   de logits en train NO lo lograba (y costaba accuracy).
-2. **Heads por tipo**: choice quiere AttnPool multicapa; noul/score MLP.
-3. **Ordinal loss**: score 0.52→0.61 (el tipo débil de todos los
-   sistemas, incluido el propietario).
+1. **Canonical ordering**: fija la presentación de opciones distintas;
+   los duplicados tras truncación necesitan una política de desempate.
+   Se retira la comparación histórica 0.77→0.00 por el error de alineación.
+2. **Heads por tipo**: choice favorece AttnPool multicapa; noul/score MLP.
+3. **Receta combinada**: score 0.52→0.61; la comparación por sí sola no
+   aísla la contribución de la loss ordinal de los otros cambios.
 4. **Volumen ≠ transferencia**: 30× datos off-domain → 0.96 in-dist
-   pero −13pts en elite. Cobertura del tipo de razonamiento > volumen.
-5. **La head ya extrae todo el backbone**: GPQA 0.315 ≈ techo LLaDA
-   0.33 — el gap de conocimiento es del backbone, no del readout.
-6. **Transferencia zero-shot sorprendente en K≤4**: SST-2 0.930 y
-   AG News 0.854 sin entrenar en clasificación; colapsa en K=77
-   (0.229 — la head nunca vio >4 opciones).
+   pero −13pts en elite; el volumen por sí solo no bastó en esas corridas.
+5. **GPQA sigue siendo débil**: main 0.3125; no demuestra un techo teórico
+   ni que la head extraiga toda la información disponible del backbone.
+6. **Transferencia zero-shot**: SST-2 0.9300 y AG News 0.8537 sin gradient
+   updates sobre esos benchmarks; K=77 es débil (0.2289).
 
 ## 6. Decisiones de diseño (y por qué)
 
@@ -98,8 +108,8 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | Heads por tipo | head única multi-task | cada tipo quiere readout distinto |
 | AttnPool multicapa | mean-pool última capa | +7pts choice; conocimiento en capas medias |
 | Ordinal aux loss | CE plano / cambiar head | respeta orden 0<1<2 sin tocar decode |
-| Eval-only en benchmarks | train en benchmark | cero leakage, contraste limpio |
-| LoRA/DAPT | full DAPT | cabe en 1 GPU, adapter portable (~300MB) |
+| Eval-only en benchmarks | train en benchmark | sin gradient updates/temp-fit en benchmarks; sí informaron selección |
+| LoRA/DAPT | full DAPT | adapter portable (~176MB); memoria depende de GPU/batch |
 | No Qwen | — | restricción del usuario; LLaDA/ecoreasoner |
 | Jev números internos no publicables | — | MCA 2.3(f); se citan reportes de terceros |
 
@@ -117,41 +127,45 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 
 ### Comparación DAPT vs frozen (elite/GPQA/SciFact acc)
 
-| eval | c_* frozen | dag g2000 | da g5000 | veredicto |
-|---|---:|---:|---:|---|
-| elite choice | 0.870 | 0.879 | **0.884** | DAPT +1.4pt ✓ |
-| elite noul | 0.783 | 0.779 | 0.756 | da −2.7pt |
-| elite score | 0.608 | 0.598 | 0.593 | −1pt |
-| GPQA main | 0.315 | 0.281 | 0.259 | −5.6pt ✗ |
-| GPQA diamond | 0.328 | 0.268 | 0.242 | −8.6pt ✗ |
-| SciFact noul | 0.853 | 0.812 | 0.724 | **−13pt** ✗ |
-| SciFact score | 0.624 | 0.515 | 0.500 | −12pt ✗ |
-| elite choice auto5 | 0.807 | 0.839 | 0.810 | DAPT ok |
-| elite noul auto5 | 0.278 | 0.413 | 0.327 | DAPT ok |
+| eval | c_* frozen | dag g2000 | da g5000 |
+|---|---:|---:|---:|
+| elite choice | 0.8698 | 0.8790 | **0.8836** |
+| elite noul | 0.7825 | 0.7790 | 0.7555 |
+| elite score | 0.6075 | 0.5978 | 0.5926 |
+| GPQA main | 0.3125 | 0.2812 | 0.2589 |
+| GPQA diamond | 0.3182 | 0.2677 | 0.2424 |
+| SciFact noul | 0.8500 | 0.8118 | 0.7235 |
+| SciFact score | 0.6294 | 0.5147 | 0.5000 |
+| elite choice auto5 | 0.8070 | 0.8392 | 0.8101 |
+| elite noul auto5 | 0.2777 | 0.4125 | 0.3272 |
 
 **Criterio sprint: elite −1pt max Y (SciFact↑ O GPQA +3pt) → NO cumple.**
-DAPT ayuda in-distribution (elite choice/auto5) pero degrada la
-transferencia externa — mismo patrón del hallazgo #4 (domain-shift).
-Release v0.1 = heads `c_*` sobre LLaDA-8B congelado; DAPT queda como
-experimento documentado (también es resultado para el paper).
+La selección sigue siendo `c_*`. No es una ablación causal de DAPT:
+`c_*` usó head_lr=3e-4, accum=1, warmup=200 y steps=2000/3000/3000;
+`dag/da/eb` usaron head_lr=1e-3, accum=8, warmup=100 y 3000 steps por tipo.
+La Tabla 4 informa las corridas disponibles con esa salvedad, sin afirmar
+que DAPT necesariamente reduzca generalización.
 
-Baseline eb_* (bw1_sr, ventana 768→ctx≤384): elite 0.280/0.667/0.334,
-GPQA 0.266/0.283, SciFact 0.594/0.300 — choice y score en el azar;
-el conocimiento de LLaDA-8B es lo que carga a c_*. NOTA: `sft_moe_v2`
-NO se apila sobre bw1_sr (su lora.pt targetea HF LLaDA-MoE-7B
-`model.layers.*`, otra arquitectura; `models/` vacío en el cluster).
+`eb_*` usa bw1_sr checkpoint-g20, de una corrida de solo 20 pasos, con
+ventana 768→ctx≤384. No representa un modelo de 1.4B plenamente entrenado.
+Elite 0.2802/0.6672/0.3344, GPQA 0.2656/0.2828, SciFact 0.5941/0.3000.
+`sft_moe_v2` es incompatible con bw1_sr: targetea módulos HF de LLaDA-MoE-7B.
 
-Cambios 25-sep: `dapt.py` ganó `--resume`/`--start-step` (PeftModel.from_pretrained
-is_trainable + fast-forward de scheduler y corpus) y el CE ahora hace
-masked-select en bf16 antes del cast fp32 (~8 GiB menos de pico → cabe en
-48GB). `sci_llada6.slurm` acepta `DAPT`/`TAG` por env (`--export=ALL,...`).
+`dapt.py --resume/--start-step` hace warm start del adapter y avanza datos
+/scheduler; no restaura optimizer ni RNG. g5000 inicializó desde g2000
+con un optimizer nuevo. El máximo nominal es 81.9M token slots, no un
+conteo medido de tokens únicos sin padding. Seleccionar logits antes del
+cast reduce memoria, pero no se verificó que DAPT bs16 quepa en 48GB.
+`sci_llada6.slurm` acepta `DAPT`/`TAG` por env (`--export=ALL,...`).
 
 ## 8. Siguiente
 
-1. ~~Decisión de heads~~ → **release = `c_*`** (DAPT documentado, §7)
-2. Tag v0.1 + release público GitHub (repo ya renombrado `sciev-devel`,
-   model card + README listos) — copiar `c_*/decision.pt` a release/HF
-3. Paper: Tabla 3 con c_* (release) + filas dag/da/eb como experimentos;
-   discusión del resultado negativo DAPT (transferencia vs in-domain)
-4. arXiv submission
-5. Decidir venue post-arXiv (workshop ML vs MEE eco)
+1. Heads seleccionados: **`c_*`**, sin cambios respecto de v0.1.
+2. Tabla 3 (benchmarks) y Tabla 4 (candidatos) verificadas contra los JSON;
+   PDF compilado y regresiones de tablas/flip incluidas en tests.
+3. Publicar v0.1.1 sin mover v0.1 ni cambiar la visibilidad privada:
+   paper, resultados/provenance, checksums y los mismos tres heads.
+4. Antes de un envío arXiv: revisión científica y bibliográfica; si se
+   quiere atribuir causalidad a DAPT, repetir con head-training igualado.
+5. Reevaluar flips no canónicos con la métrica corregida y reservar un
+   test final independiente de la selección de candidatos.

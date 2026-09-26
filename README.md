@@ -3,8 +3,8 @@
 **Sciev** (`sci`·ence + `ev`·aluation) — open **System-One-style
 decision models** on a frozen masked-diffusion backbone. Typed
 questions (`choice` / `noul` / `score`) over a `state`, answered with
-calibrated probabilities in **one forward pass** — no text generation,
-nothing to parse, nothing to hallucinate.
+probabilities in **one forward pass**, calibrated with held-out dev data —
+no text generation or output parsing. Classification errors remain possible.
 
 *(repo: `alrobles/sciev-devel`; package `reverse_jev` for now)*
 
@@ -12,38 +12,43 @@ General-purpose by design, with a scientific specialty: the heads are
 trained on passage-grounded scientific decisions and transfer zero-shot
 to general classification.
 
-The only open entry in the System-One ecosystem
-([kev](https://github.com/jaredpalmer/kev),
-[openjev](https://huggingface.co/openjev/openjev),
-[laya](https://huggingface.co/convaiinnovations/laya),
-[SemIf](https://github.com/), djev-spark) built on a **masked-diffusion
-language model** (LLaDA-8B) instead of an autoregressive one — and the
-only one with **exact option-order invariance**: options are canonically
-sorted by content, so the flip rate is `0.00` by construction rather
-than ~0.03–0.08 empirically.
+Sciev uses a **masked-diffusion language model** (LLaDA-8B) and canonical
+option sorting. Distinct option token sequences produce the same model
+input under permutation; duplicate or truncated-to-identical options need
+an explicit tie policy if their external identifiers must be distinguished.
 
-## Results (v0.1 candidate, `c_*` heads on frozen LLaDA-8B)
+## Results (v0.1.1, unchanged `c_*` weights from v0.1)
 
-| benchmark | type | acc | ECE | auto@5%err | reference |
-|---|---|---:|---:|---:|---|
-| sci battery (elite) | choice | **0.870** | 0.025 | **0.807** | — |
-| sci battery (elite) | noul | **0.783** | 0.096 | 0.278 | — |
-| sci battery (elite) | score | **0.608** | 0.122 | 0.433 | — |
-| SciFact dev | noul | **0.853** | 0.103 | 0.271 | ~0.89 |
-| SciFact dev | score | 0.624 | 0.088 | 0.250 | ~0.70 |
-| GPQA main / diamond | choice | 0.315 / 0.328 | 0.32 | 0.01 | backbone ceiling ~0.33 |
-| SST-2 (zero-shot) | choice | **0.930** | 0.068 | **0.944** | 0.957 |
-| AG News (zero-shot) | choice | **0.854** | 0.055 | 0.359 | 0.913 |
-| Enron spam (zero-shot) | choice | 0.752 | 0.105 | 0.000 | 0.987 |
-| Banking77 (K=77) | choice | 0.229 | 0.076 | 0.016 | 0.760 |
+| benchmark | type | n | acc | ECE | auto@5%err |
+|---|---|---:|---:|---:|---:|
+| sci battery (elite) | choice | 653 | **0.8698** | 0.0253 | **0.8070** |
+| sci battery (elite) | noul | 1959 | 0.7825 | 0.0957 | 0.2777 |
+| sci battery (elite) | score | 1959 | 0.6075 | 0.1221 | 0.4334 |
+| SciFact dev | noul | 340 | **0.8500** | 0.0998 | 0.2706 |
+| SciFact dev | score | 340 | 0.6294 | 0.0796 | 0.2559 |
+| GPQA main | choice | 448 | 0.3125 | 0.3180 | 0.0112 |
+| GPQA diamond | choice | 198 | 0.3182 | 0.3089 | 0.0152 |
+| SST-2 (zero-shot) | choice | 872 | **0.9300** | 0.0682 | **0.9415** |
+| AG News (zero-shot) | choice | 7600 | **0.8537** | 0.0556 | 0.3674 |
+| Enron spam (zero-shot) | choice | 2000 | 0.7510 | 0.1046 | 0.0000 |
+| Banking77 (K=77) | choice | 3080 | 0.2289 | 0.0809 | 0.0195 |
 
-`auto@5%err` = share of decisions auto-acceptable while keeping realized
-error ≤ 5% — the operating metric of a decision layer. Option-order flip
-rate is `0.00` on every benchmark (canonical ordering).
+Values come from the archived evaluation JSONs, not a new GPU evaluation.
+`paper/results.json` records source hashes, metrics, and training settings.
+These values supersede earlier transcriptions in the v0.1 documentation;
+checkpoint hashes are unchanged. Third-party scores with unverified
+protocol equivalence are not included as direct comparisons.
 
-Known limits: K>4 options (Banking77), parametric knowledge bounded by
-the backbone (GPQA ≈ LLaDA ceiling), `score` is the weakest type for
-every system measured.
+`auto@5%err` is the largest confidence-ranked prefix with realized error
+≤ 5% on labeled evaluation data, not a deployment error guarantee.
+The archived canonical-order reports record flip rate `0.00`. v0.1.1 fixes
+the metric to compare original option identities, not permuted positions;
+legacy non-canonical flip figures are withdrawn pending re-evaluation.
+
+Known limits: weak K>4 performance (Banking77), low GPQA accuracy, and
+weaker elite score than choice. Results are single runs. Public benchmarks
+were not used for gradient updates or temperature fitting, but did inform
+release-candidate selection.
 
 ## Architecture
 
@@ -51,26 +56,37 @@ every system measured.
 ctx + question + options (canonically sorted by token-ids)
   -> frozen LLaDA-8B (bidirectional masked-diffusion LM)
   -> hidden states, layers {8,16,24,32}
-  -> specialist head per decision type (~2M params)
-       choice: AttnPoolHead — learned query pools each option's tokens
-       noul:   MLP over mean-pooled span
-       score:  MLP + CORAL-style ordinal auxiliary loss (P(y>=j))
+  -> specialist head per decision type
+       choice: AttnPoolHead — 67.2M parameters, four-layer span pooling
+       noul:   MLP — 16.8M parameters, final-layer mean-pooled span
+       score:  MLP — 16.8M parameters + ordinal auxiliary loss (P(y>=j))
   -> per-option logits -> softmax (temperature fitted on dev)
 ```
 
-Heads are ~8 MB; the backbone stays frozen and is fetched from HF.
-Only the heads ship with the release.
+Checkpoint sizes are 268.7 MB (choice) and 67.2 MB each (noul, score),
+measured from the serialized heads. The backbone stays frozen and is
+fetched separately from HF. No DAPT adapter is required for the release.
 
 ## Quickstart
 
+From a v0.1.1 source checkout, download the heads and evaluate a prepared
+decision JSONL (the example assumes `my_decisions.jsonl` already exists):
+
 ```bash
 pip install -e .
+gh release download v0.1.1 --repo alrobles/sciev-devel \
+    --pattern 'sciev-0.1-*.pt' --dir release
 python -m reverse_jev.eval \
-    --ckpt runs/sci/c_choice/decision.pt \
+    --ckpt release/sciev-0.1-choice.pt \
     --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
-    --decisions-eval data/bench_external/gpqa/gpqa_main_choice_eval.jsonl \
+    --r2-temp 0.8274 --decisions-eval my_decisions.jsonl \
     --device cuda --out eval.json
 ```
+
+The `0.1` checkpoint filenames are intentional: v0.1.1 preserves those
+weights. The recorded dev temperatures are choice **0.8274**, noul
+**2.7127**, and score **0.9367**; pass the matching `--r2-temp` explicitly.
+To refit from dev data instead, use `--r2-temp-fit-decisions`.
 
 Decision records are `{ctx: [token-ids], opts: [[token-ids]...], gold}`.
 Converters for GPQA / SciFact / SST-2 / AG News / Enron / Banking77 live
@@ -79,9 +95,12 @@ in `data/convert_benchmarks.py`; the scientific battery builder is
 
 ## Domain adaptation (DAPT)
 
-`reverse_jev/dapt.py` continues the backbone's native masked-diffusion
-objective (`mask ~ U(0,1)`, CE/t) on a domain corpus via LoRA — inject
-domain knowledge into the weights, then retrain the heads on top:
+`reverse_jev/dapt.py` implements an experimental masked-token LoRA
+adaptation loop for HF backbones (requires PEFT). The evaluated g2000 and
+g5000 candidates did not satisfy the release gate, so v0.1.1 keeps `c_*`.
+Their head optimization differed from `c_*`; the comparison does not
+isolate DAPT as the cause of the observed transfer losses. See Table 4
+and the protocol caveats in the paper.
 
 ```bash
 python -m reverse_jev.dapt \
@@ -91,9 +110,11 @@ python -m reverse_jev.dapt \
 # then retrain heads with --lora-adapter runs/dapt/lora-final
 ```
 
-The same loop adapts any masked-diffusion checkpoint (e.g.
-`MdLMMoE` from [alrobles/ecoreasoner](https://github.com/alrobles/ecoreasoner)
-via `--ckpt`).
+`--resume` loads adapter weights and `--start-step` skips batches and
+advances the schedule; it does **not** restore optimizer or RNG state.
+It is a warm start, not an exact training-state resume. The DAPT module
+accepts `--hf-backbone`, not `--ckpt`; native MdLMMoE checkpoints can be
+used separately with `reverse_jev.train --ckpt`.
 
 ## Repo map
 
@@ -108,7 +129,17 @@ via `--ckpt`).
 | `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |
 | `paper/main.tex` | arXiv draft |
 
+## Verification
+
+```bash
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m pytest -q
+```
+
+The suite includes option-identity flip regressions and checks that paper
+Tables 3 and 4 agree with `paper/results.json`. Compile the paper twice
+with `pdflatex -interaction=nonstopmode -halt-on-error main.tex` from `paper/`.
+
 ## License
 
 Apache-2.0 (code + heads). Backbones and datasets keep their own
-licenses. Third-party published numbers are cited, not reproduced.
+licenses.

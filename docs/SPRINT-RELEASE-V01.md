@@ -1,4 +1,12 @@
-# SPRINT → release v0.1 (objetivo: lunes)
+# SPRINT → release v0.1 (plan histórico)
+
+Este documento conserva el plan inicial. v0.1 ya existe; para v0.1.1 el
+usuario eligió un nuevo tag/release, sin modificar v0.1 ni la visibilidad
+privada del repositorio. La decisión sigue siendo `c_*` con pesos idénticos.
+Los números y conclusiones revisados están en `paper/results.json`,
+`MODEL_CARD.md` y `PROJECT-STATUS.md`. Las afirmaciones de este plan sobre
+flips no canónicos, tamaños de heads, y causalidad DAPT no deben usarse
+sin las correcciones de la auditoría v0.1.1.
 
 ## Posicionamiento
 

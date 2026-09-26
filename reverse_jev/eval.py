@@ -379,14 +379,16 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
                 p = torch.softmax(
                     forward_feats(model, head, ids, mode, pos,
                                   layers).float() / temperature, dim=-1)
+                pred = p.argmax().item()
+                selected = order[cperm[pred] if canonical else pred]
                 if oi == 0:
+                    first_selected = selected
                     prob_rows.append(p.tolist())
                     p_gold.append(p[gpos].item())
                     golds.append(gpos)
                 else:
-                    flips += int(p.argmax().item()
-                                 != torch.tensor(prob_rows[-1]).argmax().item())
-                ord_corr.append(int(p.argmax().item() == gpos))
+                    flips += int(selected != first_selected)
+                ord_corr.append(int(pred == gpos))
     n = max(len(p_gold), 1)
     p = np.asarray(p_gold)
     probs = np.asarray(prob_rows)
