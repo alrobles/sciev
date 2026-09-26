@@ -6,7 +6,7 @@ questions (`choice` / `noul` / `score`) over a `state`, answered with
 probabilities in **one forward pass**, calibrated with held-out dev data —
 no text generation or output parsing. Classification errors remain possible.
 
-*(repo: `alrobles/sciev-devel`; package `sciev` for now)*
+*(repo: `alrobles/sciev-devel`; `pip install sciev`)*
 
 General-purpose by design, with a scientific specialty: the heads are
 trained on passage-grounded scientific decisions and transfer zero-shot
@@ -17,9 +17,28 @@ option sorting. Distinct option token sequences produce the same model
 input under permutation; duplicate or truncated-to-identical options need
 an explicit tie policy if their external identifiers must be distinguished.
 
-## Results (v0.1.1, unchanged `c_*` weights from v0.1)
+## Results (v0.2, `systemone-v2` encoding, 3 seeds)
 
-| benchmark | type | n | acc | ECE | auto@5%err |
+| eval | type | fr (release) mean ± sd | da (DAPT, experimental) |
+|---|---|---:|---:|
+| sci battery elite | choice | **0.970 ± 0.017** | 0.961 ± 0.011 |
+| sci battery elite | noul | **0.925 ± 0.006** | 0.913 ± 0.007 |
+| sci battery elite | score | **0.859 ± 0.075** | 0.779 ± 0.109 |
+| GPQA main | choice | 0.295 ± 0.014 | 0.288 ± 0.018 |
+| GPQA diamond | choice | 0.307 ± 0.012 | 0.297 ± 0.011 |
+| SciFact dev | noul | 0.483 ± 0.023 | **0.709 ± 0.020** |
+| SciFact dev | choice | 0.479 ± 0.018 | 0.444 ± 0.062 |
+
+Under matched seeds, recipe and data, DAPT helps out-of-domain
+verification (SciFact noul +22.6pt) but degrades in-domain ordinal
+scoring — task-dependent, not uniform. Evidence controls (empty /
+shuffled passages) show `choice` retains option-side leakage
+(agreement-with-reference ~0.80 without evidence) while `score`
+collapses toward chance; see the paper and `manifests/` in the release
+assets. Earlier v0.1.1 zero-shot numbers (SST-2 0.93, AG News 0.85)
+remain archived in the release JSONs.
+
+| benchmark (archived v0.1.x, `c_*` heads) | type | n | acc | ECE | auto@5%err |
 |---|---|---:|---:|---:|---:|
 | sci battery (elite) | choice | 653 | **0.8698** | 0.0253 | **0.8070** |
 | sci battery (elite) | noul | 1959 | 0.7825 | 0.0957 | 0.2777 |
@@ -33,22 +52,19 @@ an explicit tie policy if their external identifiers must be distinguished.
 | Enron spam (zero-shot) | choice | 2000 | 0.7510 | 0.1046 | 0.0000 |
 | Banking77 (K=77) | choice | 3080 | 0.2289 | 0.0809 | 0.0195 |
 
-Values come from the archived evaluation JSONs, not a new GPU evaluation.
-`paper/results.json` records source hashes, metrics, and training settings.
-These values supersede earlier transcriptions in the v0.1 documentation;
-checkpoint hashes are unchanged. Third-party scores with unverified
-protocol equivalence are not included as direct comparisons.
+The archived v0.1.x table is kept for provenance; `paper/results.json`
+records source hashes, metrics, and training settings. Third-party
+scores with unverified protocol equivalence are not included as direct
+comparisons.
 
 `auto@5%err` is the largest confidence-ranked prefix with realized error
 ≤ 5% on labeled evaluation data, not a deployment error guarantee.
-The archived canonical-order reports record flip rate `0.00`. v0.1.1 fixes
-the metric to compare original option identities, not permuted positions;
-legacy non-canonical flip figures are withdrawn pending re-evaluation.
+v0.2 fits temperatures on dev data only, and calibration artifacts are
+bound to the checkpoint SHA-256.
 
-Known limits: weak K>4 performance (Banking77), low GPQA accuracy, and
-weaker elite score than choice. Results are single runs. Public benchmarks
-were not used for gradient updates or temperature fitting, but did inform
-release-candidate selection.
+Known limits: weak K>4 performance (Banking77, v0.1.x), low GPQA
+accuracy, weaker elite score than choice, and the option-side leakage
+quantified by the evidence controls.
 
 ## Architecture
 
@@ -63,32 +79,33 @@ ctx + question + options (canonically sorted by token-ids)
   -> per-option logits -> softmax (temperature fitted on dev)
 ```
 
-Checkpoint sizes are 268.7 MB (choice) and 67.2 MB each (noul, score),
+Checkpoint sizes are 269.4 MB (choice) and 68.6 MB each (noul, score),
 measured from the serialized heads. The backbone stays frozen and is
 fetched separately from HF. No DAPT adapter is required for the release.
 
 ## Quickstart
 
-From a v0.1.1 source checkout, download the heads and evaluate a prepared
+Install the package, download the release heads, and evaluate a prepared
 decision JSONL (the example assumes `my_decisions.jsonl` already exists):
 
 ```bash
-pip install -e .
-gh release download v0.1.1 --repo alrobles/sciev-devel \
-    --pattern 'sciev-0.1-*.pt' --dir release
+pip install sciev
+gh release download v0.2.1 --repo alrobles/sciev-devel \
+    --pattern 'fr_*.pt' --dir release
 python -m sciev.eval \
-    --ckpt release/sciev-0.1-choice.pt \
+    --ckpt release/fr_choice.pt --decision-type choice \
     --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
-    --r2-temp 0.8274 --decisions-eval my_decisions.jsonl \
+    --r2-temp-fit-decisions my_decisions_dev.jsonl \
+    --decisions-eval my_decisions.jsonl \
     --device cuda --out eval.json
 ```
 
-The `0.1` checkpoint filenames are intentional: v0.1.1 preserves those
-weights. The recorded dev temperatures are choice **0.8274**, noul
-**2.7127**, and score **0.9367**; pass the matching `--r2-temp` explicitly.
-To refit from dev data instead, use `--r2-temp-fit-decisions`.
+Temperatures are fitted on dev splits only (`--r2-temp-fit-decisions`);
+the calibration artifact is bound to the checkpoint hash. Pass an
+explicit `--r2-temp` to reuse a recorded value instead.
 
-Decision records are `{ctx: [token-ids], opts: [[token-ids]...], gold}`.
+Decision records are `{ctx: [token-ids], opts: [[token-ids]...], gold}`
+(`systemone-v2` also accepts text rows; see `sciev/decisions.py`).
 Converters for GPQA / SciFact / SST-2 / AG News / Enron / Banking77 live
 in `data/convert_benchmarks.py`; the scientific battery builder is
 `data/build_sci_decisions.py`.
@@ -96,11 +113,12 @@ in `data/convert_benchmarks.py`; the scientific battery builder is
 ## Domain adaptation (DAPT)
 
 `sciev/dapt.py` implements an experimental masked-token LoRA
-adaptation loop for HF backbones (requires PEFT). The evaluated g2000 and
-g5000 candidates did not satisfy the release gate, so v0.1.1 keeps `c_*`.
-Their head optimization differed from `c_*`; the comparison does not
-isolate DAPT as the cause of the observed transfer losses. See Table 4
-and the protocol caveats in the paper.
+adaptation loop for HF backbones (requires PEFT). Under the matched
+comparison (same recipe, seeds and `systemone-v2` data), the adapted
+backbone improves out-of-domain verification (SciFact noul +22.6pt) but
+degrades in-domain ordinal scoring — the released heads therefore stay
+frozen (`fr_*`), with `da_*` published as an experimental arm. See the
+matched table and protocol caveats in the paper.
 
 ```bash
 python -m sciev.dapt \
