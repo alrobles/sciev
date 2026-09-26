@@ -151,6 +151,10 @@ class MdLMMoE(nn.Module):
         self.vocab = vocab
         self.seq_len = seq_len
         self.use_rope = use_rope
+        self.model_config = dict(vocab=vocab, hidden=hidden, layers=layers,
+                                 heads=heads, ff_mult=ff_mult, seq_len=seq_len,
+                                 n_experts=n_experts, k=k, use_rope=use_rope,
+                                 weight_tying=weight_tying)
         self.tok_emb = nn.Embedding(vocab + 1, hidden)
         self.pos = None if use_rope else nn.Embedding(seq_len, hidden)
         self.blocks = nn.ModuleList([
@@ -390,11 +394,15 @@ def load_backbone(ckpt_path, config=None, device="cpu"):
     Falls back to DEFAULT_CONFIG; infers vocab/hidden from the state dict.
     """
     cfg = dict(DEFAULT_CONFIG)
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    if isinstance(ck, dict) and "model" in ck:
+        saved_config = ck.get("model_config", {})
+        if not isinstance(saved_config, dict):
+            raise ValueError("checkpoint model_config must be an object")
+        cfg.update({k: v for k, v in saved_config.items() if k in cfg})
+        ck = ck["model"]
     if config:
         cfg.update({k: v for k, v in config.items() if k in cfg})
-    ck = torch.load(ckpt_path, map_location="cpu")
-    if isinstance(ck, dict) and "model" in ck:
-        ck = ck["model"]
     if all(k.startswith("module.") for k in ck):
         ck = {k[len("module."):]: v for k, v in ck.items()}
     # infer dims from the state dict when possible
@@ -425,7 +433,7 @@ def load_decision(ckpt_path, config=None, device="cpu", lora_adapter=None):
     checkpoint {"hf_backbone": name, "head": sd} where only the head is
     stored and the backbone is fetched from HF/the local cache.
     """
-    raw = torch.load(ckpt_path, map_location="cpu")
+    raw = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     head_sd = raw.get("head") if isinstance(raw, dict) else None
     if isinstance(raw, dict) and "hf_backbone" in raw:
         model = HFBackbone(raw["hf_backbone"], device=device,

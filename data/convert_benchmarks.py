@@ -26,6 +26,12 @@ import json
 import random
 from pathlib import Path
 
+from reverse_jev.data import (
+    add_decision, content_fingerprint, exclude_record, group_records,
+    input_fingerprints, normalized_content, read_jsonl, record_metadata,
+    write_dataset,
+)
+
 INSTR_CHOICE = "Which answer is correct?"
 INSTR_NOUL = "Is the claim supported by the passage?"
 SCORE_LEGEND = ["unrelated answer", "related but wrong answer",
@@ -34,92 +40,154 @@ MAX_CTX = 640
 MAX_OPT = 120
 
 
-def enc(tok, text, cap):
-    return tok.encode(text, add_special_tokens=False)[:cap]
+SCIFACT_CRITERIA = {
+    "SUPPORT": "The passage supports the claim.",
+    "CONTRADICT": "The passage contradicts the claim.",
+    "NEI": "The passage provides insufficient evidence to decide the claim.",
+}
 
 
-def write_rows(path, id_rows, text_rows):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text("\n".join(json.dumps(r) for r in id_rows) + "\n")
-    tp = Path(str(path).replace(".jsonl", "_text.jsonl"))
-    tp.write_text("\n".join(json.dumps(r) for r in text_rows) + "\n")
-    print(f"[wrote] {path}: {len(id_rows)}  (+text {tp.name})")
+def write_rows(path, id_rows, text_rows, manifest=None):
+    path = Path(path)
+    tp = path.with_name(f"{path.stem}_text.jsonl")
+    report = write_dataset({path: id_rows, tp: text_rows}, path.with_suffix(".manifest.json"), manifest or {})
+    print(f"[wrote] {report['outputs'][0]['path']}: {len(id_rows)}  (+text {tp.name})")
+    return report
 
 
-def conv_gpqa(src, out, tok, rng):
-    id_rows, text_by_state = [], {}
+def _manifest(src, tok, rng, count, exclusions, max_ctx, max_opt, **extra):
+    return {"builder": "convert_benchmarks", "inputs": input_fingerprints([src]),
+            "tokenizer": getattr(tok, "name_or_path", type(tok).__name__),
+            "rng_state_sha256": content_fingerprint(rng.getstate()),
+            "max_ctx": max_ctx, "max_opt": max_opt, "counts": {"input_records": count},
+            "exclusions": exclusions, **extra}
+
+
+def _deduplicate(rows, identity, exclusions):
+    unique = {}
+    for row in rows:
+        row["sample_id"] = content_fingerprint(identity(row))
+        if row["sample_id"] in unique:
+            exclude_record(exclusions, row, "duplicate_record", retained_sample_id=row["sample_id"])
+            unique[row["sample_id"]].setdefault("duplicate_sources", []).append(
+                record_metadata(row, row["source"], "unspecified"))
+        else:
+            unique[row["sample_id"]] = row
+    return list(unique.values())
+
+
+def _text_for_kind(text_rows, kind):
+    selected = []
+    for row in text_rows:
+        questions = {qid: q for qid, q in row["questions"].items() if q["type"] == kind}
+        if questions:
+            first = next(iter(questions.values()))
+            selected.append(dict(row, **{k: first[k] for k in ("task", "label_status", "legacy_proxy") if k in first},
+                                 questions=questions))
+    return selected
+
+
+def conv_gpqa(src, out, tok, rng, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None):
+    id_rows, text_by_state, exclusions = [], {}, []
     with open(src, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    for i, r in enumerate(rows):
-        q, gold = r["Question"].strip(), r["Correct Answer"].strip()
-        distr = [r[f"Incorrect Answer {j}"].strip() for j in (1, 2, 3)]
-        if not q or not gold or any(not d for d in distr):
+        inputs = list(csv.DictReader(f))
+    manifest = _manifest(src, tok, rng, len(inputs), exclusions, max_ctx, max_opt, benchmark="gpqa", seed=seed,
+                         evidence_regime="no_passage_parametric")
+    rows = []
+    fields = ("Question", "Correct Answer", *(f"Incorrect Answer {j}" for j in (1, 2, 3)))
+    for i, r in enumerate(inputs):
+        r = dict(r, source_file=str(src), source_row=i + 1)
+        r.setdefault("source", "gpqa")
+        if any(not isinstance(r.get(key), str) or not r[key].strip() for key in fields):
+            exclude_record(exclusions, r, "invalid_gpqa_schema")
             continue
-        opts = distr + [gold]
+        r.update({key: r[key].strip() for key in fields})
+        if len({normalized_content(r[key]) for key in fields[1:]}) != 4:
+            exclude_record(exclusions, r, "duplicate_options")
+            continue
+        rows.append(r)
+    rows = group_records(rows, "Question", scope="question", source="gpqa")
+    rows = _deduplicate(rows, lambda r: [r["Question"], r["Correct Answer"],
+                                       sorted(r[key] for key in fields[1:])], exclusions)
+    for r in rows:
+        q, gold = r["Question"], r["Correct Answer"]
+        opts = [r[f"Incorrect Answer {j}"] for j in (1, 2, 3)] + [gold]
         rng.shuffle(opts)
-        gold_i = opts.index(gold)
-        state = f"Question: {q}"
-        ctx = enc(tok, f"{state}\nQuestion: {INSTR_CHOICE}", MAX_CTX)
-        id_rows.append({"ctx": ctx,
-                        "opts": [enc(tok, o, MAX_OPT) for o in opts],
-                        "gold": gold_i, "kind": "choice",
-                        "qid": f"gpqa_{i}",
-                        "meta": r.get("Subdomain", "")})
-        ts = text_by_state.setdefault(state, {"state": state,
-                                              "questions": {}})
-        ts["questions"][f"gpqa_{i}"] = {
-            "type": "choice", "instructions": INSTR_CHOICE,
-            "criteria": {o: None for o in opts}, "label": gold}
-    write_rows(out, id_rows, list(text_by_state.values()))
+        metadata = dict(record_metadata(r, "gpqa", "parametric_scientific_qa"),
+                        meta=r.get("Subdomain", ""), label_status="source_reference",
+                        evidence_regime="no_passage_parametric", task="gpqa_choice")
+        add_decision(id_rows, text_by_state, tok, f"Question: {q}", f"gpqa_{r['sample_id'][:20]}",
+                     {"type": "choice", "instructions": INSTR_CHOICE,
+                      "criteria": {option: None for option in opts}, "label": gold},
+                     opts.index(gold), metadata, max_ctx, max_opt)
+    manifest["counts"]["accepted_records"] = len(rows)
+    return write_rows(out, id_rows, list(text_by_state.values()), manifest)
 
 
-def conv_scifact(src, out_prefix, tok, rng):
+def conv_scifact(src, out_prefix, tok, rng, *, legacy_score=False,
+                  max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None):
     import pandas as pd
-    df = pd.read_parquet(src)
-    noul_rows, score_rows = [], []
-    text_by_state = {}
+    inputs = pd.read_parquet(src).to_dict("records")
+    id_rows, text_by_state, exclusions, rows = [], {}, [], []
     split = Path(src).stem
-    for i, r in df.iterrows():
-        claim = str(r["claim"]).strip()
-        title = str(r["title"]).strip()
-        abstract = " ".join(str(s) for s in r["abstract"]).strip()
-        verdict = str(r["verdict"])           # SUPPORT / CONTRADICT / NEI
-        if not claim or not abstract:
+    manifest = _manifest(src, tok, rng, len(inputs), exclusions, max_ctx, max_opt, benchmark="scifact", seed=seed,
+                         primary_tasks=["support_vs_not", "nominal_verdict"], legacy_score=legacy_score,
+                         split_unit="provided source split; document identifiers or normalized evidence passage")
+    for i, r in enumerate(inputs):
+        r = dict(r, source_file=str(src), source_row=i + 1)
+        r.setdefault("source", "scifact")
+        verdict = str(r.get("verdict", "")).strip().upper()           # SUPPORT / CONTRADICT / NEI
+        if verdict not in SCIFACT_CRITERIA:
+            raise ValueError(f"{src}:row {i + 1}: unknown SciFact verdict {verdict!r}")
+        claim, title, sentences = r.get("claim"), r.get("title", ""), r.get("abstract")
+        if hasattr(sentences, "tolist"):
+            sentences = sentences.tolist()
+        if (not isinstance(claim, str) or not claim.strip() or not isinstance(title, str)
+                or not isinstance(sentences, (list, tuple)) or not sentences
+                or any(not isinstance(s, str) for s in sentences) or not " ".join(sentences).strip()):
+            exclude_record(exclusions, r, "invalid_scifact_schema")
             continue
-        state = (f"Title: {title}\nAbstract: {abstract}\n"
-                 f"Claim: {claim}")
-        ctx = enc(tok, f"{state}\nQuestion: {INSTR_NOUL}", MAX_CTX)
-        yes = enc(tok, "yes", MAX_OPT)
-        no = enc(tok, "no", MAX_OPT)
+        abstract = " ".join(sentences).strip()
+        rows.append(dict(r, claim=claim.strip(), title=title.strip(), abstract=abstract, verdict=verdict,
+                         evidence=f"{title.strip()}\n{abstract}"))
+    rows = group_records(rows, "evidence", source="scifact")
+    rows = _deduplicate(rows, lambda r: [r["evidence"], r["claim"], r["verdict"]], exclusions)
+    for r in rows:
+        claim, title, abstract, verdict = r["claim"], r["title"], r["abstract"], r["verdict"]
+        evidence = f"Title: {title}\nAbstract: {abstract}"
+        state = f"{evidence}\nClaim: {claim}"
+        identity = f"sf_{split}_{r['sample_id'][:20]}"
+        metadata = dict(record_metadata(r, "scifact", "evidence_verdict"), source_verdict=verdict,
+                        label_status="source_reference", split=split, evidence_regime="provided_passage",
+                        evidence_span=[0, len(evidence)])
         supported = verdict == "SUPPORT"
-        noul_rows.append({"ctx": ctx, "opts": [yes, no],
-                          "gold": 0 if supported else 1, "kind": "noul",
-                          "qid": f"sf_{split}_{i}_n"})
-        score_gold = {"SUPPORT": 2, "CONTRADICT": 1, "NEI": 0}[verdict]
-        score_rows.append({"ctx": ctx, "opts": [
-            enc(tok, x, MAX_OPT) for x in SCORE_LEGEND],
-            "gold": score_gold, "kind": "score",
-            "qid": f"sf_{split}_{i}_s"})
-        ts = text_by_state.setdefault(state, {"state": state,
-                                              "questions": {}})
-        ts["questions"][f"sf_{split}_{i}_n"] = {
-            "type": "noul", "instructions": INSTR_NOUL, "label": supported}
-        ts["questions"][f"sf_{split}_{i}_s"] = {
-            "type": "score", "instructions": "Rate the claim.",
-            "criteria": SCORE_LEGEND, "label": score_gold}
-    write_rows(f"{out_prefix}_noul_eval.jsonl", noul_rows,
-               [{"state": t["state"],
-                 "questions": {k: v for k, v in t["questions"].items()
-                               if k.endswith("_n")}}
-                for t in text_by_state.values()])
-    write_rows(f"{out_prefix}_score_eval.jsonl", score_rows,
-               [{"state": t["state"],
-                 "questions": {k: v for k, v in t["questions"].items()
-                               if k.endswith("_s")}}
-                for t in text_by_state.values()])
+        add_decision(id_rows, text_by_state, tok, state, f"{identity}_n",
+                     {"type": "noul", "instructions": INSTR_NOUL, "label": supported,
+                      "criteria": {"true": "The passage supports the claim.",
+                                   "false": "The passage contradicts the claim or provides insufficient evidence."}},
+                     0 if supported else 1, dict(metadata, task="scifact_support_vs_not"), max_ctx, max_opt)
+        add_decision(id_rows, text_by_state, tok, state, f"{identity}_c",
+                     {"type": "choice", "instructions": "How does the passage relate to the claim?",
+                      "criteria": SCIFACT_CRITERIA, "label": verdict}, list(SCIFACT_CRITERIA).index(verdict),
+                     dict(metadata, task="scifact_nominal_verdict", label_space=list(SCIFACT_CRITERIA)), max_ctx, max_opt)
+        if legacy_score:
+            score_gold = {"SUPPORT": 2, "CONTRADICT": 1, "NEI": 0}[verdict]
+            add_decision(id_rows, text_by_state, tok, state, f"{identity}_s",
+                         {"type": "score", "instructions": "Rate the claim.",
+                          "criteria": SCORE_LEGEND, "label": score_gold}, score_gold,
+                         dict(metadata, task="scifact_legacy_ordinal_proxy", legacy_proxy=True,
+                              label_status="legacy_proxy", rubric_provenance="legacy_verdict_mapping"), max_ctx, max_opt)
+    files = {}
+    for kind in ("noul", "choice", *(("score",) if legacy_score else ())):
+        task_name = "score_legacy_proxy" if kind == "score" else kind
+        path = Path(f"{out_prefix}_{task_name}_eval.jsonl")
+        files[path] = [row for row in id_rows if row["kind"] == kind]
+        files[path.with_name(f"{path.stem}_text.jsonl")] = _text_for_kind(text_by_state.values(), kind)
+    manifest["counts"]["accepted_records"] = len(rows)
+    return write_dataset(files, Path(f"{out_prefix}_manifest.json"), manifest)
 
 
-def conv_classification(src, out, tok, rng, cfg):
+def conv_classification(src, out, tok, rng, cfg, *, max_ctx=MAX_CTX, max_opt=MAX_OPT, seed=None):
     """Generic K-way classification -> choice rows.
 
     cfg: {text_field, label_names, ctx_fmt, question, label_field?,
@@ -129,34 +197,43 @@ def conv_classification(src, out, tok, rng, cfg):
     if cfg.get("labels_file"):
         labels = [x.replace("_", " ")
                   for x in json.loads(Path(cfg["labels_file"]).read_text())]
-    if src.endswith(".parquet"):
+    if (not isinstance(labels, list) or len(labels) < 2
+            or any(not isinstance(label, str) or not label.strip() for label in labels)
+            or len(set(labels)) != len(labels)):
+        raise ValueError("label_names must contain at least two distinct nonempty strings")
+    if Path(src).suffix == ".parquet":
         import pandas as pd
-        rows = pd.read_parquet(src).to_dict("records")
+        inputs = pd.read_parquet(src).to_dict("records")
     else:
-        rows = [json.loads(l) for l in open(src, encoding="utf-8")
-                if l.strip()]
-    id_rows, text_by_state = [], {}
-    skipped = 0
-    for i, r in enumerate(rows):
-        text = str(r[cfg["text_field"]]).strip()
-        gold = int(r[cfg["label_field"]])
-        if not text or not (0 <= gold < len(labels)):
-            skipped += 1
+        inputs = [dict(row, source_line=line) for line, row in read_jsonl(src)]
+    id_rows, text_by_state, exclusions, rows = [], {}, [], []
+    tag, label_field = cfg.get("tag", Path(src).stem), cfg.get("label_field", "label")
+    manifest = _manifest(src, tok, rng, len(inputs), exclusions, max_ctx, max_opt, benchmark=tag, seed=seed,
+                         label_space=labels)
+    if cfg.get("labels_file"):
+        manifest["inputs"] = input_fingerprints([src, cfg["labels_file"]])
+    for i, r in enumerate(inputs):
+        r = dict(r, source_file=str(src), source_row=i + 1)
+        r.setdefault("source", tag)
+        text, gold = r.get(cfg["text_field"]), r.get(label_field)
+        if type(gold) is not int or not 0 <= gold < len(labels):
+            raise ValueError(f"{src}:row {i + 1}: invalid classification label {gold!r}")
+        if not isinstance(text, str) or not text.strip():
+            exclude_record(exclusions, r, "invalid_classification_text")
             continue
+        rows.append(dict(r, **{cfg["text_field"]: text.strip()}))
+    rows = group_records(rows, cfg["text_field"], scope="text", source=tag)
+    rows = _deduplicate(rows, lambda r: [tag, r[cfg["text_field"]], r[label_field]], exclusions)
+    for r in rows:
+        text, gold = r[cfg["text_field"]], r[label_field]
         state = cfg["ctx_fmt"].format(t=text)
-        ctx = enc(tok, f"{state}\nQuestion: {cfg['question']}", MAX_CTX)
-        id_rows.append({"ctx": ctx,
-                        "opts": [enc(tok, o, MAX_OPT) for o in labels],
-                        "gold": gold, "kind": "choice",
-                        "qid": f"{cfg['tag']}_{i}"})
-        ts = text_by_state.setdefault(state, {"state": state,
-                                              "questions": {}})
-        ts["questions"][f"{cfg['tag']}_{i}"] = {
-            "type": "choice", "instructions": cfg["question"],
-            "criteria": {o: None for o in labels}, "label": labels[gold]}
-    write_rows(out, id_rows, list(text_by_state.values()))
-    if skipped:
-        print(f"[skip] {skipped} rows")
+        metadata = dict(record_metadata(r, tag, "classification"), label_status="source_reference", label_space=labels)
+        add_decision(id_rows, text_by_state, tok, state, f"{tag}_{r['sample_id'][:20]}",
+                     {"type": "choice", "instructions": cfg["question"],
+                      "criteria": {label: None for label in labels}, "label": labels[gold]},
+                     gold, metadata, max_ctx, max_opt)
+    manifest["counts"]["accepted_records"] = len(rows)
+    return write_rows(out, id_rows, list(text_by_state.values()), manifest)
 
 
 CLASSIF_CFGS = {
@@ -186,25 +263,34 @@ def main():
     ap.add_argument("--src", required=True)
     ap.add_argument("--out", default=None, help="gpqa: output jsonl")
     ap.add_argument("--out-prefix", default=None,
-                    help="scifact: prefix for _noul/_score_eval.jsonl")
+                    help="scifact: prefix for native _noul/_choice_eval.jsonl")
     ap.add_argument("--labels-file", default=None,
                     help="json list of label names (banking77)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--seed", type=int, default=7331)
+    ap.add_argument("--legacy-score", action="store_true",
+                    help="also emit the explicitly legacy/proxy SciFact ordinal mapping")
+    ap.add_argument("--max-ctx", type=int, default=MAX_CTX)
+    ap.add_argument("--max-opt", type=int, default=MAX_OPT)
     args = ap.parse_args()
+    if args.bench == "scifact" and not args.out_prefix:
+        ap.error("--out-prefix is required for scifact")
+    if args.bench != "scifact" and (not args.out or args.legacy_score):
+        ap.error("--out is required; --legacy-score is only available for scifact")
 
     rng = random.Random(args.seed)
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(args.tokenizer)
+    tok = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
+    options = {"max_ctx": args.max_ctx, "max_opt": args.max_opt, "seed": args.seed}
     if args.bench == "gpqa":
-        conv_gpqa(args.src, args.out, tok, rng)
+        conv_gpqa(args.src, args.out, tok, rng, **options)
     elif args.bench == "scifact":
-        conv_scifact(args.src, args.out_prefix, tok, rng)
+        conv_scifact(args.src, args.out_prefix, tok, rng, legacy_score=args.legacy_score, **options)
     else:
         cfg = dict(CLASSIF_CFGS[args.bench], tag=args.bench)
         if args.labels_file:
             cfg["labels_file"] = args.labels_file
-        conv_classification(args.src, args.out, tok, rng, cfg)
+        conv_classification(args.src, args.out, tok, rng, cfg, **options)
 
 
 if __name__ == "__main__":

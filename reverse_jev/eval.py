@@ -107,21 +107,12 @@ def span_logprob(model, ctx, cand, device):
 def _option_logits(model, head, ctx, ok, bad, device, mode="marker",
                    layers=(-1,)):
     """R2 forward per order. Returns [logits_a, logits_b] (2-dim tensors)."""
-    from .model import marker_layout, spanpool_layout
-    mask_id = model.mask_id
+    from .decisions import decision_logits
     out = []
     for opts, _gold in (((ok, bad), 0), ((bad, ok), 1)):
         # fit markers + options inside seq_len
-        cap = (model.seq_len - len(ctx) - len(opts)) // len(opts)
-        opts = [o[:max(cap, 1)] for o in opts]
-        if mode == "marker":
-            ids, pos = marker_layout(ctx, opts, mask_id)
-        else:
-            ids, bounds = spanpool_layout(ctx, opts)
-        ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
-        from .model import forward_feats
-        pos = pos if mode == "marker" else bounds
-        out.append(forward_feats(model, head, ids, mode, pos, layers).float())
+        logits, _ = decision_logits(model, head, ctx, opts, device, mode, layers)
+        out.append(logits)
     return out
 
 
@@ -185,44 +176,40 @@ def fit_r2_temperature(model, head, pairs, device, mode="spanpool",
 
 def _r2_row_logits(model, head, ctx, opts, device, mode, layers=(-1,)):
     """One forward -> (K,) head logits for options in given order."""
-    from .model import marker_layout, spanpool_layout, forward_feats
-    K = len(opts)
-    ctx = ctx[:model.seq_len // 2]
-    cap = max(1, (model.seq_len - len(ctx) - K) // K)
-    opts = [o[:cap] for o in opts]
-    if mode == "marker":
-        ids, pos = marker_layout(ctx, opts, model.mask_id)
-    else:
-        ids, pos = spanpool_layout(ctx, opts)
-    ids = _clamp_oob(torch.tensor(ids, dtype=torch.long, device=device), model)
-    return forward_feats(model, head, ids, mode, pos, layers).float()
+    from .decisions import decision_logits
+    logits, _ = decision_logits(model, head, ctx, opts, device, mode, layers)
+    return logits
 
 
 def fit_r2_temperature_decisions(model, head, rows, device,
                                  mode="spanpool", layers=(-1,),
-                                 canonical=False):
+                                 canonical=False, strict=None, return_logits=False):
     """Fit scalar T minimizing NLL over K-way decision rows (dev only)."""
-    examples = []
+    from .decisions import ENCODING_VERSION, decision_logits, validate_decision_row
+    rows = [validate_decision_row(row) for row in rows]
+    if not rows:
+        raise ValueError("temperature fitting requires at least one dev decision")
+    encodings = {row.get("encoding", "legacy_ids") for row in rows}
+    if len(encodings) != 1:
+        raise ValueError("temperature fitting cannot mix encoding profiles")
+    if strict is None:
+        strict = next(iter(encodings)) == ENCODING_VERSION
+    examples, grouped = [], {}
     with torch.no_grad():
         for row in rows:
-            opts = list(row["opts"])
-            gold = int(row["gold"])
-            if canonical:
-                cperm = sorted(range(len(opts)),
-                               key=lambda j: tuple(opts[j]))
-                gold = cperm.index(gold)
-                opts = [opts[j] for j in cperm]
-            lg = _r2_row_logits(model, head, row["ctx"], opts,
-                                device, mode, layers)
-            examples.append((lg, gold))
-    if not examples:
-        return 1.0
+            logits, prepared = decision_logits(
+                model, head, row["ctx"], row["opts"], device, mode, layers,
+                canonical=canonical, strict=strict)
+            examples.append((logits, row["gold"]))
+            ordered = logits[prepared.order]
+            grouped.setdefault(len(ordered), []).append((ordered, prepared.order.index(row["gold"])))
+    batches = [(torch.stack([logits for logits, _ in group]).double(),
+                torch.tensor([gold for _, gold in group], device=group[0][0].device))
+               for group in grouped.values()]
 
     def nll(t):
-        return float(sum(
-            F.cross_entropy((lg / t).unsqueeze(0),
-                            torch.tensor([g], device=lg.device)).item()
-            for lg, g in examples))
+        return sum(F.cross_entropy(logits / t, golds, reduction="sum").item()
+                   for logits, golds in batches)
 
     grid = np.concatenate([np.linspace(0.2, 5.0, 97),
                            np.linspace(5.5, 20.0, 30)])
@@ -235,7 +222,8 @@ def fit_r2_temperature_decisions(model, head, rows, device,
             hi = np.exp(d)
         else:
             lo = np.exp(c)
-    return float(np.exp((np.log(lo) + np.log(hi)) / 2))
+    temperature = float(np.exp((np.log(lo) + np.log(hi)) / 2))
+    return (temperature, examples) if return_logits else temperature
 
 
 def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
@@ -333,7 +321,8 @@ def eval_pairs(model, pairs, device, mask_p=0.15, seed=7331, head=None,
 
 def eval_decisions_ids(model, head, rows, device, mode="spanpool",
                        temperature=1.0, seed=7331, layers=(-1,),
-                       canonical=False):
+                       canonical=False, decision_type=None, fixed_labels=False,
+                       acceptance_policy=None, return_predictions=False, strict=None):
     """K-way labeled decisions {ctx, opts[K], gold}: two orders per row.
 
     canonical=True sorts each presented option list deterministically by
@@ -343,71 +332,104 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
     Returns acc (debiased mean-p argmax), per-order acc, flip_rate,
     mean p_gold, brier (K-dim), nll, ece, automation, calib_curve.
     """
-    from .model import marker_layout, spanpool_layout
+    from .decisions import (ENCODING_VERSION, decision_logits, decision_prediction,
+                            decision_probabilities, validate_decision_row)
+    from .metrics import classification_metrics, evaluate_acceptance_policy
+
+    rows = [validate_decision_row(row) for row in rows]
+    if not rows:
+        raise ValueError("evaluation requires at least one decision; input is empty")
+    if decision_type not in (None, "choice", "noul", "score"):
+        raise ValueError("decision_type must be choice, noul, or score")
+    kinds = {row["kind"] for row in rows if row.get("kind") is not None}
+    if decision_type is not None and kinds - {decision_type}:
+        raise ValueError("decision_type conflicts with dataset kinds")
+    if decision_type is None and len(kinds) == 1:
+        decision_type = next(iter(kinds))
+    encodings = {row.get("encoding", "legacy_ids") for row in rows}
+    if len(encodings) != 1:
+        raise ValueError("evaluation cannot mix encoding profiles")
+    if strict is None:
+        strict = next(iter(encodings)) == ENCODING_VERSION
+    decision_probabilities(torch.zeros(2), temperature)
+    if decision_type == "noul" and any(len(row["opts"]) != 2 for row in rows):
+        raise ValueError("noul requires exactly two options")
+    fixed_labels = fixed_labels or decision_type in ("noul", "score") or all(
+        row.get("label_space") is not None for row in rows)
+    label_names = None
+    if fixed_labels and any(row.get("option_keys") is not None for row in rows):
+        label_names = rows[0].get("label_space", rows[0].get("option_keys"))
+        if (not isinstance(label_names, list) or len(set(label_names)) != len(label_names)
+                or any(row.get("option_keys") is None or
+                       set(row["option_keys"]) != set(label_names) for row in rows)):
+            raise ValueError("fixed label metrics require the same named label space")
     rng = random.Random(seed)
-    mask_id = model.mask_id
-    max_ctx = model.seq_len // 2
-    p_gold, ord_corr, flips, prob_rows, golds = [], [], 0, [], []
+    prob_rows, golds, predictions, second_correct, records = [], [], [], [], []
+    flips = context_truncated = options_truncated = input_tokens = 0
+    started = time.perf_counter()
     with torch.no_grad():
         for row in rows:
-            ctx, opts, gold = row["ctx"], row["opts"], row["gold"]
-            ctx = ctx[:max_ctx]
-            K = len(opts)
-            cap = max(1, (model.seq_len - len(ctx) - K) // K)
-            opts = [o[:cap] for o in opts]
-            orders = [list(range(K))]
-            perm = list(range(K))
+            perm = list(range(len(row["opts"])))
             rng.shuffle(perm)
-            orders.append(perm)
-            for oi, order in enumerate(orders):
-                ordered = [opts[j] for j in order]
-                gidx = order.index(gold)
-                if canonical:
-                    cperm = sorted(range(K), key=lambda j: tuple(ordered[j]))
-                    ordered = [ordered[j] for j in cperm]
-                    gpos = cperm.index(gidx)
-                else:
-                    gpos = gidx
-                if mode == "marker":
-                    ids, pos = marker_layout(ctx, ordered, mask_id)
-                else:
-                    ids, bounds = spanpool_layout(ctx, ordered)
-                ids = _clamp_oob(
-                    torch.tensor(ids, dtype=torch.long, device=device), model)
-                from .model import forward_feats
-                pos = pos if mode == "marker" else bounds
-                p = torch.softmax(
-                    forward_feats(model, head, ids, mode, pos,
-                                  layers).float() / temperature, dim=-1)
-                pred = p.argmax().item()
-                selected = order[cperm[pred] if canonical else pred]
-                if oi == 0:
+            first_selected = None
+            for order in (None, perm):
+                logits, prepared = decision_logits(
+                    model, head, row["ctx"], row["opts"], device, mode, layers,
+                    canonical=canonical, order=order, strict=strict)
+                selected = decision_prediction(logits, prepared)
+                input_tokens += len(prepared.ids)
+                if order is None:
                     first_selected = selected
-                    prob_rows.append(p.tolist())
-                    p_gold.append(p[gpos].item())
-                    golds.append(gpos)
+                    probs = decision_probabilities(logits, temperature)
+                    prob_rows.append(probs)
+                    golds.append(row["gold"])
+                    predictions.append(selected)
+                    context_truncated += int(prepared.context_truncated > 0)
+                    options_truncated += int(any(prepared.option_truncated))
+                    records.append({
+                        **{key: row[key] for key in ("qid", "kind", "pid", "split_group",
+                                                    "group_id", "option_keys") if key in row},
+                        "gold": row["gold"], "prediction": selected,
+                        "probabilities": probs, "max_probability": max(probs),
+                        "correct": int(selected == row["gold"]),
+                        "context_truncated": prepared.context_truncated,
+                        "option_truncated": prepared.option_truncated})
                 else:
                     flips += int(selected != first_selected)
-                ord_corr.append(int(pred == gpos))
-    n = max(len(p_gold), 1)
-    p = np.asarray(p_gold)
-    probs = np.asarray(prob_rows)
-    conf_top = probs.max(axis=-1)
-    corr_top = (probs.argmax(-1) == np.asarray(golds)).astype(float)
-    return {
-        "n": len(p_gold),
-        "acc": round(float(corr_top.mean()), 4),
-        "acc_order_a": round(float(np.mean(ord_corr[0::2])), 4),
-        "acc_order_b": round(float(np.mean(ord_corr[1::2])), 4),
-        "flip_rate": round(flips / n, 4),
-        "mean_p_gold": round(float(p.mean()), 4),
-        "nll": round(float(-np.log(np.clip(p, 1e-9, 1)).mean()), 4),
-        "brier": round(brier_multi(prob_rows, golds), 4),
-        "ece": round(ece(conf_top, corr_top), 4),
-        "automation_5pct": round(automation_rate(conf_top, corr_top), 4),
-        "temperature": round(temperature, 4),
-        "calib_curve": _calib_curve(conf_top, corr_top),
-    }
+                    second_correct.append(int(selected == row["gold"]))
+    metric_probs, metric_golds, metric_predictions = prob_rows, golds, predictions
+    if label_names is not None:
+        metric_probs, metric_golds, metric_predictions = [], [], []
+        for row, probs, gold, predicted in zip(rows, prob_rows, golds, predictions):
+            keys = row["option_keys"]
+            metric_probs.append([probs[keys.index(key)] for key in label_names])
+            metric_golds.append(label_names.index(keys[gold]))
+            metric_predictions.append(label_names.index(keys[predicted]))
+    report = classification_metrics(metric_probs, metric_golds,
+                                    ordinal=decision_type == "score", fixed_labels=fixed_labels,
+                                    predictions=metric_predictions)
+    confidences = [max(probs) for probs in prob_rows]
+    corrects = [int(predicted == gold) for predicted, gold in zip(predictions, golds)]
+    report.update({
+        "metrics_version": 2, "decision_type": decision_type,
+        "encoding": next(iter(encodings)), "label_space": "fixed" if fixed_labels else "per_example",
+        "prediction_protocol": "first presentation; second permutation is diagnostic",
+        "acc_order_a": report["acc"], "acc_order_b": sum(second_correct) / len(rows),
+        "flip_rate": flips / len(rows),
+        "mean_p_gold": float(np.mean([probs[gold] for probs, gold in zip(prob_rows, golds)])),
+        "automation_5pct": report["oracle_automation_5pct"],
+        "automation_note": "retrospective tie-safe oracle; not a deployment policy",
+        "temperature": float(temperature), "calib_curve": _calib_curve(confidences, corrects),
+        "truncation": {"context_rows": context_truncated, "option_rows": options_truncated},
+        "forward_passes": 2 * len(rows), "model_input_tokens": input_tokens,
+        "elapsed_s": time.perf_counter() - started})
+    if label_names is not None:
+        report["label_names"] = list(label_names)
+    if acceptance_policy is not None:
+        report["selective"] = evaluate_acceptance_policy(confidences, corrects, acceptance_policy)
+    if return_predictions:
+        report["predictions"] = records
+    return report
 
 
 def _calib_curve(confs, corrects, n_bins=10):
@@ -608,6 +630,24 @@ def main():
     ap.add_argument("--canonical-order", action="store_true",
                     help="sort options deterministically by content before "
                          "layout (must match training)")
+    ap.add_argument("--decision-type", choices=["choice", "noul", "score"],
+                    default=None, help="task type asserted for --decisions-eval")
+    ap.add_argument("--fixed-labels", action="store_true",
+                    help="compute metrics on the shared named label space")
+    ap.add_argument("--allow-truncation", dest="strict_inputs",
+                    action="store_false", default=None,
+                    help="explicitly permit truncation (default: strict for "
+                         "systemone-v2 encoded rows)")
+    ap.add_argument("--strict-inputs", dest="strict_inputs",
+                    action="store_true",
+                    help="reject any input truncation")
+    ap.add_argument("--calibration-in", default=None,
+                    help="frozen r2_calibration artifact (temperature + "
+                         "acceptance policy); verifies checkpoint fingerprint "
+                         "and eval/calibration disjointness")
+    ap.add_argument("--train-reference", default=None,
+                    help="training decisions jsonl; fails on known identity "
+                         "overlap with the evaluation set")
     ap.add_argument("--r2-temp-fit", default=None,
                     help="dev pairs dir: fit T on it, then evaluate test")
     ap.add_argument("--r2-temp-fit-decisions", default=None,
@@ -673,9 +713,11 @@ def main():
             report["r2_temp_fitted"] = round(r2_temp, 4)
             print(f"[temp] fitted T={r2_temp:.3f} on "
                   f"{len(dev_pairs)} dev pairs", file=sys.stderr)
+        fitted_dev_rows = None
         if head is not None and args.r2_temp_fit_decisions:
             from .data import load_decisions_ids
             dev_rows = load_decisions_ids(args.r2_temp_fit_decisions)
+            fitted_dev_rows = dev_rows
             r2_temp = fit_r2_temperature_decisions(
                 model, head, dev_rows, args.device, mode=args.r2_mode,
                 layers=layers, canonical=args.canonical_order)
@@ -708,10 +750,44 @@ def main():
                          "(--head or decision.pt with head)")
             from .data import load_decisions_ids
             rows = load_decisions_ids(args.decisions_eval)
+            if fitted_dev_rows is not None:
+                from . import protocol
+                report["dev_eval_disjointness"] = protocol.assert_disjoint_splits(
+                    {"temperature_dev": fitted_dev_rows, "evaluation": rows})
+            acceptance_policy = None
+            if args.calibration_in:
+                from .calibration import load_calibration
+                if not args.head:
+                    ap.error("--calibration-in verifies the checkpoint given "
+                             "by --head")
+                expected = {"mode": args.r2_mode, "layers": layers,
+                            "canonical_order": args.canonical_order}
+                if args.decision_type:
+                    expected["decision_type"] = args.decision_type
+                artifact = load_calibration(
+                    args.calibration_in, args.head, evaluation_rows=rows,
+                    expected_inference=expected)
+                r2_temp = artifact["temperature"]
+                acceptance_policy = artifact["acceptance_policy"]
+                report["calibration"] = {
+                    "file": args.calibration_in,
+                    "temperature": artifact["temperature"],
+                    "encoding": artifact["inference"]["encoding"],
+                    "training_overlap_check":
+                        artifact["provenance"]["training_overlap_check"]["status"]}
+            if args.train_reference:
+                from . import protocol
+                ref_rows = load_decisions_ids(args.train_reference)
+                report["train_overlap_check"] = protocol.assert_disjoint_splits(
+                    {"train_reference": ref_rows, "evaluation": rows})
             out = eval_decisions_ids(model, head, rows, args.device,
                                      mode=args.r2_mode, temperature=r2_temp,
                                      seed=args.seed, layers=layers,
-                                     canonical=args.canonical_order)
+                                     canonical=args.canonical_order,
+                                     decision_type=args.decision_type,
+                                     fixed_labels=args.fixed_labels,
+                                     acceptance_policy=acceptance_policy,
+                                     strict=args.strict_inputs)
             report["decisions_eval"] = {
                 "file": args.decisions_eval, **out}
             print(json.dumps(out, indent=2))

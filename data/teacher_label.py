@@ -24,27 +24,44 @@ LETTERS = string.ascii_uppercase  # A..Z
 
 def render_prompt(state, q):
     """state + question -> lettered-option chat prompt."""
+    from reverse_jev.decisions import render_value
+
     qt = q["type"]
     if qt == "choice":
-        opts = list(q["criteria"].keys())
-        labels = [f"{LETTERS[i]}) {o}" for i, o in enumerate(opts)]
-        gold = opts.index(q["label"])
-        body = f"{state}\n\n{q['instructions']}\n\n" + "\n".join(labels)
+        keys = list(q["criteria"])
+        opts = [key if value is None else f"{key}: {render_value(value, 'choice description', allow_empty=True)}"
+                for key, value in q["criteria"].items()]
+        gold = keys.index(q["label"])
     elif qt == "noul":
-        opts = ["valid", "invalid"]
-        labels = ["A) valid — the right tool with matching arguments",
-                  "B) invalid — wrong tool or arguments that do not match the request"]
-        gold = 0 if q["label"] in (True, "true", "yes") else 1
-        body = f"{state}\n\n{q['instructions']}\n\n" + "\n".join(labels)
+        opts = ["yes", "no"]
+        criteria = q.get("criteria")
+        if criteria is not None:
+            if not isinstance(criteria, dict) or set(criteria) != {"true", "false"}:
+                raise ValueError("noul criteria must define true and false")
+            opts = [f"{option}: {render_value(criteria[key], 'noul criterion')}"
+                    for option, key in zip(opts, ("true", "false"))]
+        label = q["label"]
+        if label is True or (isinstance(label, str) and label.lower() in ("true", "yes")):
+            gold = 0
+        elif label is False or (isinstance(label, str) and label.lower() in ("false", "no")):
+            gold = 1
+        else:
+            raise ValueError("noul label must be true or false")
     elif qt == "score":
         opts = list(q["criteria"]) if isinstance(q["criteria"], list) \
             else [q["criteria"][k] for k in sorted(q["criteria"], key=int)]
-        labels = [f"{LETTERS[i]}) {o}" for i, o in enumerate(opts)]
-        gold = int(q["label"])
-        body = (f"{state}\n\n{q['instructions']}\n\n"
-                + "\n".join(labels))
+        opts = [render_value(option, "score criterion") for option in opts]
+        label = q["label"]
+        if isinstance(label, bool) or not isinstance(label, (int, str)):
+            raise ValueError("score label must be an integer level")
+        gold = int(label)
     else:
         return None, None, None
+    if not 2 <= len(opts) <= len(LETTERS) or not 0 <= gold < len(opts):
+        raise ValueError("teacher questions require 2..26 options and an in-range label")
+    labels = [f"{LETTERS[i]}) {option}" for i, option in enumerate(opts)]
+    body = (f"{render_value(state, 'state', allow_empty=True)}\n\n"
+            f"{render_value(q['instructions'], 'instructions')}\n\n" + "\n".join(labels))
     body += "\n\nAnswer with only the letter of the best option."
     return body, opts, gold
 

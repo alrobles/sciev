@@ -78,29 +78,73 @@ def _canonical_perm(opts):
 
 
 def _r2_example(model, ctx, opts, gold, rng, device, mode="marker",
-                canonical=False):
+                canonical=False, strict=False):
     """Build one R2 training example with an option permutation.
 
     marker   : ctx + [M] opt_1 + ... + [M] opt_K -> head reads h[marker]
     spanpool : ctx + opt_1 + ... + opt_K         -> head reads mean h[span]
     canonical: deterministic content-sorted order instead of random
     """
-    from .model import marker_layout, spanpool_layout
-    K = len(opts)
-    max_ctx = model.seq_len // 2
-    ctx = ctx[:max_ctx]
-    cap = max(1, (model.seq_len - len(ctx) - K) // K)
-    opts = [o[:cap] for o in opts]
-    perm = _canonical_perm(opts) if canonical else \
-        rng.sample(range(K), K)
-    opts = [opts[j] for j in perm]
-    gold = perm.index(gold)
-    if mode == "marker":
-        ids, pos = marker_layout(ctx, opts, model.mask_id)
-    else:
-        ids, pos = spanpool_layout(ctx, opts)
-    ids = torch.tensor(ids, dtype=torch.long, device=device).clamp(0, model.mask_id)
-    return ids, pos, gold, perm
+    from .decisions import prepare_decision, validate_decision_row
+    row = validate_decision_row({"ctx": ctx, "opts": opts, "gold": gold})
+    order = None if canonical else rng.sample(range(len(opts)), len(opts))
+    prepared = prepare_decision(model, row["ctx"], row["opts"], mode,
+                                canonical=canonical, order=order, strict=strict)
+    ids = torch.tensor(prepared.ids, dtype=torch.long, device=device)
+    return ids, prepared.positions, prepared.order.index(gold), prepared.order
+
+
+def apply_scientific_recipe(args):
+    """Apply the shared scientific-v1 recipe to parsed CLI arguments."""
+    if args.recipe is None:
+        return
+    if args.recipe != "scientific-v1":
+        raise ValueError(f"unknown recipe {args.recipe!r}")
+    if args.decision_type not in {"choice", "noul", "score"}:
+        raise ValueError("--decision-type is required with --recipe scientific-v1")
+    from .protocol import scientific_recipe
+    recipe = scientific_recipe(args.decision_type)
+    args.freeze = recipe["freeze"]
+    args.r2_mode = recipe["r2_mode"]
+    args.canonical_order = recipe["canonical_order"]
+    args.orders = recipe["orders"]
+    args.head_kind = recipe["head_kind"]
+    args.steps = recipe["steps"]
+    args.head_lr = recipe["head_lr"]
+    args.warmup = recipe["warmup"]
+    args.accum = recipe["accum"]
+    args.ordinal = recipe["ordinal"]
+    args.strict_inputs = True
+    args.training_contract = "scientific-v1"
+
+
+def r2_checkpoint(model, head, examples, args):
+    """Self-describing R2 head checkpoint with inference + training metadata."""
+    from . import protocol
+    effective_layers = [-1] if args.head_kind == "mlp" else list(args.layers_list)
+    encodings = {ex.get("encoding") for ex in examples if isinstance(ex, dict)}
+    inference = {"head_kind": args.head_kind, "mode": args.r2_mode,
+                 "layers": effective_layers,
+                 "canonical_order": args.canonical_order,
+                 "strict_inputs": bool(args.strict_inputs),
+                 "decision_type": args.decision_type,
+                 "encoding": next(iter(encodings)) if len(encodings) == 1 else None,
+                 "seq_len": model.seq_len}
+    ckpt = {"head": head.state_dict(),
+            "head_kind": args.head_kind,
+            "n_layers": len(effective_layers),
+            "inference": inference,
+            "meta": {"mode": f"r2_{args.r2_mode}",
+                     "pairs_train": args.pairs_train,
+                     "decisions_train": args.decisions_train,
+                     "recipe": getattr(args, "training_contract", None),
+                     "seed": args.seed}}
+    if all(isinstance(ex, dict) for ex in examples):
+        ckpt["training_data"] = protocol.dataset_contract(examples)
+    inputs = [p for p in (args.pairs_train, args.decisions_train) if p]
+    if inputs:
+        ckpt["input_files"] = [protocol.file_fingerprint(p) for p in inputs]
+    return ckpt
 
 
 def train_r2(model, head, examples, args, device):
@@ -110,6 +154,16 @@ def train_r2(model, head, examples, args, device):
     {"ctx","opts","gold","qid"?,"soft"?} from load_decisions_ids.
     """
     import random as _r
+    from .decisions import ENCODING_VERSION, validate_decision_row
+    if not examples:
+        raise ValueError("training requires at least one decision")
+    if args.steps < 1 or args.accum < 1 or args.orders < 1:
+        raise ValueError("steps, accum, and orders must be positive")
+    for example in examples:
+        if isinstance(example, dict):
+            validate_decision_row(example)
+            if args.ordinal > 0 and example.get("kind") not in (None, "score"):
+                raise ValueError("ordinal loss requires score decisions, not nominal classes")
     rng = _r.Random(args.seed)
     params = [{"params": head.parameters(), "lr": args.head_lr}]
     if not args.freeze:
@@ -127,12 +181,16 @@ def train_r2(model, head, examples, args, device):
         if step % len(order) == 0:
             rng.shuffle(order)
         ex = examples[order[step % len(order)]]
+        strict = getattr(args, "strict_inputs", None)
         if isinstance(ex, dict):
             ctx, opts, gold = ex["ctx"], ex["opts"], ex["gold"]
             soft = ex.get("soft")
+            if strict is None:
+                strict = ex.get("encoding") == ENCODING_VERSION
         else:
             ctx, opts, gold = ex
             soft = None
+            strict = bool(strict)
         # --orders N: average logits over N option orders (canonical space).
         # canonical order makes all N draws identical -> single forward.
         n_orders = 1 if args.canonical_order else args.orders
@@ -140,7 +198,7 @@ def train_r2(model, head, examples, args, device):
         for _ in range(n_orders):
             ids, pos, gold_p, perm = _r2_example(
                 model, ctx, opts, gold, rng, device, mode=args.r2_mode,
-                canonical=args.canonical_order)
+                canonical=args.canonical_order, strict=strict)
             lg = forward_feats(model, head, ids, args.r2_mode, pos,
                                layers=args.layers_list)
             lg_c = torch.empty_like(lg)
@@ -182,8 +240,9 @@ def train_r2(model, head, examples, args, device):
             pg = -(adv.detach().unsqueeze(-1) * (noise / (args.rl_noise ** 2))
                    * logits.unsqueeze(0)).sum(-1).mean()
             loss = loss + args.rl * pg
-        (loss / args.accum).backward()
-        if (step + 1) % args.accum == 0:
+        window_size = min(args.accum, args.steps - (step // args.accum) * args.accum)
+        (loss / window_size).backward()
+        if (step + 1) % args.accum == 0 or step + 1 == args.steps:
             lr_scale = min(1.0, (step + 1) / max(1, args.warmup))
             for g, base in zip(opt.param_groups, [args.head_lr, args.lr][:len(params)]):
                 g["lr"] = base * lr_scale
@@ -207,6 +266,17 @@ def main():
                     help="K-way decisions jsonl {ctx,opts,gold} (R2 path)")
     ap.add_argument("--levels", default="L0,L1,L2,L3",
                     help="comma list of pair levels to train on (R2)")
+    ap.add_argument("--recipe", choices=["scientific-v1"], default=None,
+                    help="matched scientific training recipe; requires "
+                         "--decision-type (R2 path)")
+    ap.add_argument("--decision-type", choices=["choice", "noul", "score"],
+                    default=None, help="task type for the matched recipe")
+    ap.add_argument("--strict-inputs", action="store_true", default=None,
+                    help="reject any input truncation instead of silently "
+                         "truncating (R2; default follows data encoding)")
+    ap.add_argument("--allow-truncation", dest="strict_inputs",
+                    action="store_false",
+                    help="explicitly permit truncation with reporting")
     ap.add_argument("--freeze", action="store_true",
                     help="R2: freeze backbone, train DecisionHead only")
     ap.add_argument("--r2-mode", choices=["marker", "spanpool"],
@@ -262,6 +332,9 @@ def main():
 
     # ---------- R2 path: option head on id-examples, no tokenizer ----------
     if args.pairs_train or args.decisions_train:
+        apply_scientific_recipe(args)
+        from . import protocol
+        protocol.ensure_fresh_output(out_dir)
         from .data import load_pairs_dir, load_decisions_ids
         from .model import (DecisionHead, AttnPoolHead, HFBackbone,
                             forward_feats)
@@ -306,12 +379,7 @@ def main():
         print(f"[data] {len(examples)} examples "
               f"(mode={args.r2_mode}, freeze={args.freeze})")
         model, head = train_r2(model, head, examples, args, args.device)
-        ckpt = {"head": head.state_dict(),
-                "head_kind": args.head_kind,
-                "n_layers": len(args.layers_list),
-                "meta": {"mode": f"r2_{args.r2_mode}",
-                         "pairs_train": args.pairs_train,
-                         "decisions_train": args.decisions_train}}
+        ckpt = r2_checkpoint(model, head, examples, args)
         if isinstance(model, HFBackbone):
             ckpt["hf_backbone"] = model.hf_name   # head only; 16GB not stored
             if args.lora_adapter:
