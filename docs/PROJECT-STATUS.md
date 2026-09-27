@@ -20,7 +20,7 @@ todos los cambios de accuracy al DAPT.
 | Runs/checkpoints | `/beegfs/a474r867/sciev/runs/sci/` |
 | Notas internas (gitignored) | `runs/sci/ABLATION.md`, `runs/sci/STRATEGY.md` |
 | Paper draft | `paper/main.tex` |
-| Reporte cruzado en ecoreasoner | `docs/REVERSE-JEV-PARALLEL-WORK.md` |
+| Reporte cruzado en ecoreasoner | `docs/SCIEV-PARALLEL-WORK.md` |
 
 ## 2. Qué se planteó
 
