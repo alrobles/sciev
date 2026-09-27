@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=r2_matched_KIND
 #SBATCH --partition=sixhour
-#SBATCH --gres=gpu:pro6000:1
+#SBATCH --gres=gpu:q6000:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=05:00:00
@@ -30,6 +30,11 @@ for CFG in main diamond; do
     [ -e "$EXT/gpqa/systemone-v2/gpqa_${CFG}_choice_eval_clean.jsonl" ] || [ "$KIND" != "choice" ] || { echo "missing clean gpqa_$CFG"; exit 1; }
 done
 
+# elite eval target: the systemone-v2 battery (group-disjoint, complete
+# evidence, zero question-truncated rows) — same files as the archived
+# matched evals, under the renamed repo root.
+ELITE_EVAL="$BAT/systemone-v2/sci_${KIND}_eval.jsonl"
+
 run_eval () {  # ckpt evalfile tag
     local ck=$1 ev=$2 tag=$3
     local dst="$RUNS/eval_r2_${tag}.json"
@@ -39,7 +44,7 @@ run_eval () {  # ckpt evalfile tag
         --ckpt "$ck" \
         --decision-type "$KIND" --seed 7331 \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
-        --r2-temp-fit-decisions "$BAT/sci_${KIND}_dev.jsonl" \
+        --r2-temp-fit-decisions "$BAT/systemone-v2/sci_${KIND}_dev.jsonl" \
         --decisions-eval "$ev" --predictions \
         --device cuda --out "$dst"
 }
@@ -48,7 +53,7 @@ for BB in fr da; do
     for S in 7331 7332 7333; do
         CK="$RUNS/${BB}_matched_s${S}_${KIND}/decision.pt"
         [ -f "$CK" ] || { echo "missing $CK"; continue; }
-        run_eval "$CK" "$BAT/sci_${KIND}_eval.jsonl" "${BB}_s${S}_${KIND}_elite"
+        run_eval "$CK" "$ELITE_EVAL" "${BB}_s${S}_${KIND}_elite"
         case "$KIND" in
             choice)
                 run_eval "$CK" "$EXT/gpqa/systemone-v2/gpqa_main_choice_eval_clean.jsonl"    "${BB}_s${S}_${KIND}_gpqa_main"

@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
                           get_linear_schedule_with_warmup)
 
-MODEL = "microsoft/deberta-v3-base"
+MODEL = "roberta-base"
 LABELS = ["SUPPORT", "CONTRADICT", "NEI"]
 SCORE_MAP = {"SUPPORT": 2, "CONTRADICT": 1, "NEI": 0}
 

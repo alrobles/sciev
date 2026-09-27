@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=r2_dev_preds
 #SBATCH --partition=sixhour
-#SBATCH --gres=gpu:pro6000:1
+#SBATCH --gres=gpu:q6000:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=01:30:00
@@ -25,20 +25,43 @@ export PYTHONPATH=/beegfs/a474r867/pylibs/peft013:/beegfs/a474r867/pylibs/tf446:
 cd "$RJ"
 
 
+# dev preds: fit T on the systemone-v2 dev file (archived self-fit
+# procedure), then evaluate the same dev file with --r2-temp to emit
+# per-item probs.
 for KIND in choice noul score; do
     DST="$RUNS/eval_r2_c_${KIND}_devpreds.json"
     if [ -e "$DST" ]; then echo "skip $DST"; continue; fi
     echo "=== DEV PREDS $KIND ==="
+    T=$("$PY" scripts/fit_dev_temp.py \
+        --ckpt "$RUNS/c_${KIND}/decision.pt" \
+        --dev "$BAT/systemone-v2/sci_${KIND}_dev.jsonl" \
+        --r2-layers="$LAYERS" --canonical-order --device cuda | tail -1)
+    echo "[temp] $KIND T=$T (v2 dev)"
     "$PY" -m sciev.eval \
         --ckpt "$RUNS/c_${KIND}/decision.pt" \
         --decision-type "$KIND" --seed 7331 \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
-        --r2-temp-fit-decisions "$BAT/sci_${KIND}_dev.jsonl" \
-        --decisions-eval "$BAT/sci_${KIND}_dev.jsonl" --predictions \
+        --r2-temp "$T" \
+        --decisions-eval "$BAT/systemone-v2/sci_${KIND}_dev.jsonl" --predictions \
         --device cuda --out "$DST"
 done
 
-# test-set preds for the two public benchmarks with dev-selected threshold
+# test-set preds with T fitted on v2 dev (group-disjoint splits):
+# systemone-v2 eval files + scifact clean files.
+for KIND in choice noul score; do
+    EV="$BAT/systemone-v2/sci_${KIND}_eval.jsonl"
+    DST="$RUNS/eval_r2_c_${KIND}_elite_preds.json"
+    if [ -e "$DST" ]; then echo "skip $DST"; continue; fi
+    echo "=== TEST PREDS elite $KIND ==="
+    "$PY" -m sciev.eval \
+        --ckpt "$RUNS/c_${KIND}/decision.pt" \
+        --decision-type "$KIND" --seed 7331 \
+        --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
+        --r2-temp-fit-decisions "$BAT/systemone-v2/sci_${KIND}_dev.jsonl" \
+        --decisions-eval "$EV" --predictions \
+        --device cuda --out "$DST"
+done
+
 for EV in "$EXT/scifact/systemone-v2/clean_dev_noul_eval.jsonl" \
           "$EXT/scifact/systemone-v2/clean_dev_score_legacy_proxy_eval.jsonl"; do
     KIND=$(basename "$EV" | sed 's/.*_\(noul\|score\).*eval.*/\1/')
@@ -49,7 +72,7 @@ for EV in "$EXT/scifact/systemone-v2/clean_dev_noul_eval.jsonl" \
         --ckpt "$RUNS/c_${KIND}/decision.pt" \
         --decision-type "$KIND" --seed 7331 \
         --r2-mode spanpool --r2-layers="$LAYERS" --canonical-order \
-        --r2-temp-fit-decisions "$BAT/sci_${KIND}_dev.jsonl" \
+        --r2-temp-fit-decisions "$BAT/systemone-v2/sci_${KIND}_dev.jsonl" \
         --decisions-eval "$EV" --predictions \
         --device cuda --out "$DST"
 done
