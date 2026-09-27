@@ -22,18 +22,15 @@ export PYTHONNOUSERSITE=1
 export PYTHONPATH=/beegfs/a474r867/pylibs/peft013:/beegfs/a474r867/pylibs/tf446:$RJ
 cd "$RJ"
 
-# use the CLEAN text mirrors (duplicate-option items excluded); build if absent
+# use the CLEAN text mirrors (duplicate-option items excluded)
 for CFG in main diamond; do
-    CLEAN="$EXT/gpqa/gpqa_${CFG}_choice_eval_clean.jsonl"
-    if [ ! -e "$CLEAN" ]; then
-        "$PY" data/convert_benchmarks.py --bench gpqa \
-            --src "$EXT/gpqa/dataset/gpqa_${CFG}.csv" --out "$CLEAN"
-    fi
+    CLEAN="$EXT/gpqa/systemone-v2/gpqa_${CFG}_choice_eval_clean_text.jsonl"
+    [ -e "$CLEAN" ] || { echo "missing $CLEAN"; exit 1; }
     DST="$RUNS/eval_llada_prompted_gpqa_${CFG}.json"
     if [ -e "$DST" ]; then echo "skip $DST"; continue; fi
     echo "=== prompted eval gpqa_$CFG ==="
     "$PY" scripts/eval_llada_prompted.py \
-        --text-file "$EXT/gpqa/gpqa_${CFG}_choice_eval_clean_text.jsonl" \
+        --text-file "$EXT/gpqa/systemone-v2/gpqa_${CFG}_choice_eval_clean_text.jsonl" \
         --out "$DST" --device cuda
 done
 echo "ALL_DONE"

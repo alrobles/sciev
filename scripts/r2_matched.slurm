@@ -25,16 +25,10 @@ export PYTHONNOUSERSITE=1
 export PYTHONPATH=/beegfs/a474r867/pylibs/peft013:/beegfs/a474r867/pylibs/tf446:$RJ
 cd "$RJ"
 
-# self-contained: clean GPQA files (duplicate-option items excluded)
-if [ "$KIND" = "choice" ]; then
-    for CFG in main diamond; do
-        DST="$EXT/gpqa/gpqa_${CFG}_choice_eval_clean.jsonl"
-        if [ ! -e "$DST" ]; then
-            "$PY" data/convert_benchmarks.py --bench gpqa \
-                --src "$EXT/gpqa/dataset/gpqa_${CFG}.csv" --out "$DST"
-        fi
-    done
-fi
+# clean eval files were pre-generated into data/*/systemone-v2/
+for CFG in main diamond; do
+    [ -e "$EXT/gpqa/systemone-v2/gpqa_${CFG}_choice_eval_clean.jsonl" ] || [ "$KIND" != "choice" ] || { echo "missing clean gpqa_$CFG"; exit 1; }
+done
 
 run_eval () {  # ckpt evalfile tag
     local ck=$1 ev=$2 tag=$3
@@ -57,14 +51,14 @@ for BB in fr da; do
         run_eval "$CK" "$BAT/sci_${KIND}_eval.jsonl" "${BB}_s${S}_${KIND}_elite"
         case "$KIND" in
             choice)
-                run_eval "$CK" "$EXT/gpqa/gpqa_main_choice_eval_clean.jsonl"    "${BB}_s${S}_${KIND}_gpqa_main"
-                run_eval "$CK" "$EXT/gpqa/gpqa_diamond_choice_eval_clean.jsonl" "${BB}_s${S}_${KIND}_gpqa_diamond"
+                run_eval "$CK" "$EXT/gpqa/systemone-v2/gpqa_main_choice_eval_clean.jsonl"    "${BB}_s${S}_${KIND}_gpqa_main"
+                run_eval "$CK" "$EXT/gpqa/systemone-v2/gpqa_diamond_choice_eval_clean.jsonl" "${BB}_s${S}_${KIND}_gpqa_diamond"
                 ;;
             noul)
-                run_eval "$CK" "$EXT/scifact/scifact_dev_noul_eval.jsonl"  "${BB}_s${S}_${KIND}_scifact"
+                run_eval "$CK" "$EXT/scifact/systemone-v2/clean_dev_noul_eval.jsonl"  "${BB}_s${S}_${KIND}_scifact"
                 ;;
             score)
-                run_eval "$CK" "$EXT/scifact/scifact_dev_score_eval.jsonl" "${BB}_s${S}_${KIND}_scifact"
+                run_eval "$CK" "$EXT/scifact/systemone-v2/clean_dev_score_legacy_proxy_eval.jsonl" "${BB}_s${S}_${KIND}_scifact"
                 ;;
         esac
     done

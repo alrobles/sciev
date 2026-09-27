@@ -24,6 +24,7 @@ export PYTHONNOUSERSITE=1
 export PYTHONPATH=/beegfs/a474r867/pylibs/peft013:/beegfs/a474r867/pylibs/tf446:$RJ
 cd "$RJ"
 
+
 for KIND in choice noul score; do
     DST="$RUNS/eval_r2_c_${KIND}_devpreds.json"
     if [ -e "$DST" ]; then echo "skip $DST"; continue; fi
@@ -38,9 +39,9 @@ for KIND in choice noul score; do
 done
 
 # test-set preds for the two public benchmarks with dev-selected threshold
-for EV in "$EXT/scifact/scifact_dev_noul_eval.jsonl" \
-          "$EXT/scifact/scifact_dev_score_eval.jsonl"; do
-    KIND=$(basename "$EV" | sed 's/.*_\(noul\|score\)_eval.*/\1/')
+for EV in "$EXT/scifact/systemone-v2/clean_dev_noul_eval.jsonl" \
+          "$EXT/scifact/systemone-v2/clean_dev_score_legacy_proxy_eval.jsonl"; do
+    KIND=$(basename "$EV" | sed 's/.*_\(noul\|score\).*eval.*/\1/')
     DST="$RUNS/eval_r2_c_${KIND}_scifact_preds.json"
     if [ -e "$DST" ]; then echo "skip $DST"; continue; fi
     echo "=== TEST PREDS scifact $KIND ==="

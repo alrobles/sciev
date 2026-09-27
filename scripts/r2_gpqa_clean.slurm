@@ -28,13 +28,10 @@ export PYTHONNOUSERSITE=1
 export PYTHONPATH=/beegfs/a474r867/pylibs/peft013:/beegfs/a474r867/pylibs/tf446:$RJ
 cd "$RJ"
 
-echo "=== STEP 1: regenerate clean GPQA eval files (dup options excluded) ==="
+echo "=== STEP 1: clean GPQA eval files (pre-generated, systemone-v2) ==="
 for CFG in main diamond; do
-    SRC="$EXT/gpqa/dataset/gpqa_${CFG}.csv"
-    DST="$EXT/gpqa/gpqa_${CFG}_choice_eval_clean.jsonl"
-    if [ ! -e "$DST" ]; then
-        "$PY" data/convert_benchmarks.py --bench gpqa --src "$SRC" --out "$DST"
-    fi
+    DST="$EXT/gpqa/systemone-v2/gpqa_${CFG}_choice_eval_clean.jsonl"
+    [ -e "$DST" ] || { echo "MISSING $DST"; exit 1; }
 done
 
 echo "=== STEP 2: options-only variants (ctx = instruction only) ==="
@@ -46,8 +43,8 @@ tok = AutoTokenizer.from_pretrained("GSAI-ML/LLaDA-8B-Instruct",
                                     local_files_only=True)
 INSTR = "Which answer is correct?"
 for cfg in ("main", "diamond"):
-    src = f"/beegfs/a474r867/sciev/data/bench_external/gpqa/gpqa_{cfg}_choice_eval_clean.jsonl"
-    dst = f"/beegfs/a474r867/sciev/data/bench_external/gpqa/gpqa_{cfg}_choice_eval_optonly.jsonl"
+    src = f"/beegfs/a474r867/sciev/data/bench_external/gpqa/systemone-v2/gpqa_{cfg}_choice_eval_clean.jsonl"
+    dst = f"/beegfs/a474r867/sciev/data/bench_external/gpqa/systemone-v2/gpqa_{cfg}_choice_eval_optonly.jsonl"
     if os.path.exists(dst):
         continue
     ctx = tok.encode(f"Question: {INSTR}", add_special_tokens=False)
@@ -76,9 +73,9 @@ run_eval () {  # evalfile tag
         --device cuda --out "$dst"
 }
 
-run_eval "$EXT/gpqa/gpqa_main_choice_eval_clean.jsonl"       gpqa_main_clean
-run_eval "$EXT/gpqa/gpqa_diamond_choice_eval_clean.jsonl"    gpqa_diamond_clean
-run_eval "$EXT/gpqa/gpqa_main_choice_eval_optonly.jsonl"     gpqa_main_optonly
-run_eval "$EXT/gpqa/gpqa_diamond_choice_eval_optonly.jsonl"  gpqa_diamond_optonly
+run_eval "$EXT/gpqa/systemone-v2/gpqa_main_choice_eval_clean.jsonl"       gpqa_main_clean
+run_eval "$EXT/gpqa/systemone-v2/gpqa_diamond_choice_eval_clean.jsonl"    gpqa_diamond_clean
+run_eval "$EXT/gpqa/systemone-v2/gpqa_main_choice_eval_optonly.jsonl"     gpqa_main_optonly
+run_eval "$EXT/gpqa/systemone-v2/gpqa_diamond_choice_eval_optonly.jsonl"  gpqa_diamond_optonly
 
 echo "ALL_DONE"
