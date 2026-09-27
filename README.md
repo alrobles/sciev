@@ -90,7 +90,7 @@ decision JSONL (the example assumes `my_decisions.jsonl` already exists):
 
 ```bash
 pip install sciev
-gh release download v0.2.1 --repo alrobles/sciev \
+gh release download v0.2.2 --repo alrobles/sciev \
     --pattern 'fr_*.pt' --dir release
 python -m sciev.eval \
     --ckpt release/fr_choice.pt --decision-type choice \
