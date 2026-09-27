@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sciev — open typed decision models for science</title>
+<meta name="description" content="Sciev: typed decision heads on a frozen masked-diffusion backbone. Evidence-grounded choice, verification and scoring with calibrated probabilities — one forward pass, no text generation.">
+<link rel="canonical" href="https://sciev.org/">
+<style>
+:root { --fg:#1a1a1a; --muted:#555; --accent:#0b5fff; --bg:#fff; --code:#f5f6f8; --border:#e3e5e9; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e8e8e8; --muted:#a5a5a5; --accent:#6ea3ff; --bg:#101214; --code:#1b1e22; --border:#2a2e33; }
+}
+* { box-sizing:border-box; }
+body { font-family: Georgia, 'Times New Roman', serif; color:var(--fg); background:var(--bg);
+       max-width: 46em; margin: 0 auto; padding: 3em 1.2em 4em; line-height: 1.55; }
+h1 { font-size: 2.6em; margin: 0 0 .1em; letter-spacing: -.02em; }
+h1 .sci { color: var(--accent); }
+h2 { font-size: 1.15em; margin-top: 2.2em; border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+.tag { font-size: 1.15em; color: var(--muted); margin: 0 0 1.6em; }
+.links a { color: var(--accent); text-decoration: none; margin-right: 1.1em; font-weight: bold; }
+.links a:hover { text-decoration: underline; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code);
+            border-radius: 4px; font-size: .9em; }
+code { padding: .1em .35em; }
+pre { padding: .9em 1em; overflow-x: auto; border: 1px solid var(--border); line-height: 1.45; }
+table { border-collapse: collapse; width: 100%; font-size: .92em; margin: .8em 0; }
+th, td { padding: .35em .6em; text-align: left; border-bottom: 1px solid var(--border); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.note { color: var(--muted); font-size: .9em; }
+ul { padding-left: 1.3em; }
+li { margin-bottom: .3em; }
+.badges img { vertical-align: middle; margin-right: .35em; }
+footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid var(--border);
+         color: var(--muted); font-size: .85em; }
+</style>
+</head>
+<body>
+
+<h1><span class="sci">Sci</span>ev</h1>
+<p class="tag"><em>sci</em>ence + <em>ev</em>aluation — an open, typed decision
+layer for scientific evidence.</p>
+
+<p class="badges">
+  <a href="https://pypi.org/project/sciev/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sciev"></a>
+  <a href="https://github.com/alrobles/sciev"><img alt="GitHub" src="https://img.shields.io/badge/github-alrobles%2Fsciev-181717?logo=github"></a>
+  <a href="https://github.com/alrobles/sciev/blob/main/LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+</p>
+
+<p>Unstructured state + typed questions → structured decisions with
+<strong>calibrated probabilities, in one forward pass — no text generation,
+no output parsing</strong>. Sciev attaches small specialist heads
+(<code>choice</code> / <code>noul</code> / <code>score</code>) to a frozen
+masked-diffusion backbone (LLaDA-8B), in the spirit of TypeSafe AI's
+System-One/Jev contract — but open, reproducible, and evaluated as
+science.</p>
+
+<p class="links">
+  <a href="https://github.com/alrobles/sciev">GitHub</a>
+  <a href="https://pypi.org/project/sciev/">PyPI</a>
+  <a href="https://github.com/alrobles/sciev/releases">Releases &amp; weights</a>
+  <a href="https://github.com/alrobles/sciev/releases/download/v0.2.2/sciev-v0.2.2-paper.pdf">Paper (PDF)</a>
+</p>
+
+<h2>Install &amp; evaluate</h2>
+
+<pre><code>pip install sciev
+gh release download v0.2.2 --repo alrobles/sciev --pattern 'fr_*.pt' --dir release
+python -m sciev.eval --ckpt release/fr_choice.pt --decision-type choice \
+    --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
+    --decisions-eval my_decisions.jsonl --device cuda --out eval.json</code></pre>
+
+<p>Also exposes a <code>/v1/systemone</code>-compatible server
+(<code>pip install sciev[serve]</code>): drop-in typed decisions with the same
+frozen heads used in the evaluations.</p>
+
+<h2>Results (v0.2, systemone-v2, mean ± sd over 3 seeds)</h2>
+
+<table>
+<tr><th>eval</th><th>type</th><th class="num">fr (frozen, release)</th><th class="num">da (DAPT, exp.)</th></tr>
+<tr><td>sci battery — elite</td><td>choice</td><td class="num"><b>0.970 ± 0.017</b></td><td class="num">0.961 ± 0.011</td></tr>
+<tr><td>sci battery — elite</td><td>noul</td><td class="num"><b>0.925 ± 0.006</b></td><td class="num">0.913 ± 0.007</td></tr>
+<tr><td>sci battery — elite</td><td>score</td><td class="num"><b>0.859 ± 0.075</b></td><td class="num">0.779 ± 0.109</td></tr>
+<tr><td>GPQA main</td><td>choice</td><td class="num">0.295 ± 0.014</td><td class="num">0.288 ± 0.018</td></tr>
+<tr><td>SciFact dev</td><td>noul</td><td class="num">0.483 ± 0.023</td><td class="num"><b>0.709 ± 0.020</b></td></tr>
+<tr><td>SciFact dev</td><td>choice</td><td class="num">0.479 ± 0.018</td><td class="num">0.444 ± 0.062</td></tr>
+</table>
+
+<p class="note">Release heads are the frozen-backbone arm (<code>fr_*</code>).
+The DAPT arm (<code>da_*</code>) is experimental: under matched seeds it
+improves out-of-domain verification (+22.6pt SciFact) but degrades in-domain
+ordinal scoring.</p>
+
+<h2>Honest evaluation, built in</h2>
+
+<ul>
+  <li><b>Dev-only calibration</b> — temperatures and acceptance policies are
+      fitted on dev splits and bound to the checkpoint hash before test
+      evaluation.</li>
+  <li><b>Evidence controls</b> — empty and shuffled-passage variants of every
+      eval. They reveal real limits: <code>choice</code> keeps ~0.80 agreement
+      without evidence (option-side leakage) while <code>score</code> collapses
+      to chance.</li>
+  <li><b>Registered exclusions</b> — inputs exceeding the token budget are
+      excluded with reasons in manifests, never silently truncated.</li>
+  <li><b>Provenance</b> — dataset manifests with SHA-256 fingerprints; 32
+      archived evaluation JSONs ship with each release.</li>
+</ul>
+
+<h2>Where it fits</h2>
+
+<p>Evidence-grounded QA, claim verification, rubric scoring, routing and
+tool selection — wherever you need a calibrated accept/escalate decision
+rather than generated text. Not a generator; it complements, not replaces,
+reasoning models.</p>
+
+<h2>Cite</h2>
+
+<pre><code>@software{robles_sciev_2026,
+  author = {Robles, Angel},
+  title  = {Sciev: open typed decision models on masked-diffusion backbones},
+  url    = {https://github.com/alrobles/sciev},
+  version = {v0.2.2},
+  year   = {2026}
+}</code></pre>
+
+<footer>
+Apache-2.0 · maintained by <a href="https://github.com/alrobles">alrobles</a> ·
+status + design log in <a href="https://github.com/alrobles/sciev/blob/main/docs/PROJECT-STATUS.md">PROJECT-STATUS</a> ·
+built with <a href="https://devin.ai">Devin</a>
+</footer>
+
+</body>
+</html>
