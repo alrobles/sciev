@@ -6,7 +6,7 @@ questions (`choice` / `noul` / `score`) over a `state`, answered with
 probabilities in **one forward pass**, calibrated with held-out dev data —
 no text generation or output parsing. Classification errors remain possible.
 
-*(repo: `alrobles/sciev-devel`; `pip install sciev`)*
+*(repo: `alrobles/sciev`; `pip install sciev`)*
 
 General-purpose by design, with a scientific specialty: the heads are
 trained on passage-grounded scientific decisions and transfer zero-shot
@@ -90,7 +90,7 @@ decision JSONL (the example assumes `my_decisions.jsonl` already exists):
 
 ```bash
 pip install sciev
-gh release download v0.2.1 --repo alrobles/sciev-devel \
+gh release download v0.2.1 --repo alrobles/sciev \
     --pattern 'fr_*.pt' --dir release
 python -m sciev.eval \
     --ckpt release/fr_choice.pt --decision-type choice \

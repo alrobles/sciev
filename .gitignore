@@ -8,3 +8,4 @@ evals/*.json
 wandb/
 .pytest_cache/
 runs/e0/
+build/

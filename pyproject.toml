@@ -37,10 +37,10 @@ serve = ["fastapi>=0.100", "uvicorn>=0.23"]
 dev = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/alrobles/sciev-devel"
-Repository = "https://github.com/alrobles/sciev-devel"
-Issues = "https://github.com/alrobles/sciev-devel/issues"
-Releases = "https://github.com/alrobles/sciev-devel/releases"
+Homepage = "https://github.com/alrobles/sciev"
+Repository = "https://github.com/alrobles/sciev"
+Issues = "https://github.com/alrobles/sciev/issues"
+Releases = "https://github.com/alrobles/sciev/releases"
 
 [build-system]
 requires = ["setuptools>=68"]

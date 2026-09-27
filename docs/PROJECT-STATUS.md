@@ -14,7 +14,7 @@ todos los cambios de accuracy al DAPT.
 
 | recurso | ubicación |
 |---|---|
-| Repo principal | `github.com/alrobles/sciev-devel` · local `~/GitHub/sciev` · cluster `/beegfs/a474r867/sciev` |
+| Repos | release público `github.com/alrobles/sciev` · dev privado `github.com/alrobles/sciev-devel` · local `~/GitHub/sciev` · cluster `/beegfs/a474r867/sciev` |
 | Repo hermano (backbone propio) | `github.com/alrobles/ecoreasoner` · cluster `/beegfs/a474r867/ecoreasoner` |
 | Datos (cluster) | `data/sci_battery{,_v2}`, `data/bench_external/` |
 | Runs/checkpoints | `/beegfs/a474r867/sciev/runs/sci/` |
