@@ -658,6 +658,8 @@ def main():
     ap.add_argument("--pairs-dir", help="dir with pairs_L*.jsonl (battery)")
     ap.add_argument("--decisions-eval", default=None,
                     help="K-way decisions jsonl {ctx,opts,gold} (needs --head)")
+    ap.add_argument("--predictions", action="store_true",
+                    help="include per-item prediction records in the report")
     ap.add_argument("--data", help="System-One decisions jsonl (labeled)")
     ap.add_argument("--remote", help="base URL of a /v1/systemone endpoint")
     ap.add_argument("--api-key-file", help="file with API key (remote mode)")
@@ -787,6 +789,7 @@ def main():
                                      decision_type=args.decision_type,
                                      fixed_labels=args.fixed_labels,
                                      acceptance_policy=acceptance_policy,
+                                     return_predictions=args.predictions,
                                      strict=args.strict_inputs)
             report["decisions_eval"] = {
                 "file": args.decisions_eval, **out}
