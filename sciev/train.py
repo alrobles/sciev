@@ -109,7 +109,8 @@ def apply_scientific_recipe(args):
     args.canonical_order = recipe["canonical_order"]
     args.orders = recipe["orders"]
     args.head_kind = recipe["head_kind"]
-    args.steps = recipe["steps"]
+    if args.steps is None:
+        args.steps = recipe["steps"]
     args.head_lr = recipe["head_lr"]
     args.warmup = recipe["warmup"]
     args.accum = recipe["accum"]
@@ -157,6 +158,8 @@ def train_r2(model, head, examples, args, device):
     from .decisions import ENCODING_VERSION, validate_decision_row
     if not examples:
         raise ValueError("training requires at least one decision")
+    if args.steps is None:
+        args.steps = 2000
     if args.steps < 1 or args.accum < 1 or args.orders < 1:
         raise ValueError("steps, accum, and orders must be positive")
     for example in examples:
@@ -308,7 +311,8 @@ def main():
     ap.add_argument("--config", default=None)
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--steps", type=int, default=2000)
+    ap.add_argument("--steps", type=int, default=None,
+                    help="training steps; default follows --recipe")
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--accum", type=int, default=8)
