@@ -61,6 +61,15 @@ def test_evaluation_rejects_empty_inputs():
         eval_decisions_ids(stub(), None, [], "cpu")
 
 
+def test_evaluation_rejects_duplicate_option_encodings():
+    # gpqa_74 regression: source CSV duplicated the gold option verbatim;
+    # canonical ordering then remapped gold differently across presentations
+    # while position-space flips stayed zero (acc_order_a != acc_order_b).
+    rows = [{"ctx": [1], "opts": [[4], [2], [2]], "gold": 1}]
+    with pytest.raises(ValueError, match="distinct|identical|indistinguishable"):
+        eval_decisions_ids(stub(), None, rows, "cpu", canonical=True)
+
+
 def test_native_checkpoint_uses_saved_architecture(tmp_path):
     config = dict(vocab=32, hidden=8, layers=1, heads=2, ff_mult=2,
                   seq_len=32, n_experts=1, k=1)
