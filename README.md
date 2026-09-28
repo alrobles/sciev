@@ -32,10 +32,13 @@ an explicit tie policy if their external identifiers must be distinguished.
 Under matched seeds, recipe and data, DAPT helps out-of-domain
 verification (SciFact noul +22.6pt) but degrades in-domain ordinal
 scoring — task-dependent, not uniform. Evidence controls (empty /
-shuffled passages) show `choice` retains option-side leakage
-(agreement-with-reference ~0.80 without evidence) while `score`
-collapses toward chance; see the paper and `manifests/` in the release
-assets. Earlier v0.1.1 zero-shot numbers (SST-2 0.93, AG News 0.85)
+shuffled passages) show `choice` retains option-side leakage: the
+frozen head still agrees with the reference on **0.875** of items after
+the passage is removed (adapted 0.806), while `score` is much more
+sensitive to evidence changes; see the paper and `manifests/` in the
+release assets. A revised manuscript prepared for arXiv submission
+reports this matched study with evidence controls and per-seed values.
+Earlier v0.1.1 zero-shot numbers (SST-2 0.93, AG News 0.85)
 remain archived in the release JSONs.
 
 | benchmark (archived v0.1.x, `c_*` heads) | type | n | acc | ECE | auto@5%err |
@@ -53,7 +56,11 @@ remain archived in the release JSONs.
 | Banking77 (K=77) | choice | 3080 | 0.2289 | 0.0809 | 0.0195 |
 
 The archived v0.1.x table is kept for provenance; `paper/results.json`
-records source hashes, metrics, and training settings. Third-party
+records source hashes, metrics, and training settings. Caveat: the
+elite-battery rows used a passage-first layout that truncated the
+question tail on roughly half of long-context rows, so those cells
+are retained as historical values, not clean question-conditioned
+results — the `systemone-v2` study above supersedes them. Third-party
 scores with unverified protocol equivalence are not included as direct
 comparisons.
 
@@ -145,7 +152,7 @@ used separately with `sciev.train --ckpt`.
 | `data/` | battery builders + benchmark converters |
 | `scripts/*.slurm` | reproducible jobs (KU HPC) |
 | `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |
-| `paper/main.tex` | arXiv draft |
+| `paper/main.tex` | archived release draft; the revised arXiv manuscript is prepared separately |
 
 ## Verification
 
