@@ -94,7 +94,10 @@ fetched separately from HF. No DAPT adapter is required for the release.
 ## Quickstart
 
 Install the package, download the release heads, and evaluate a prepared
-decision JSONL (the example assumes `my_decisions.jsonl` already exists):
+decision JSONL (the example assumes `my_decisions.jsonl` already exists).
+The same heads are also on Hugging Face at
+[`alrobles/sciev`](https://huggingface.co/alrobles/sciev) (frozen heads
+under `release/`, experimental adapted heads under `experimental/`).
 
 ```bash
 pip install sciev
