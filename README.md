@@ -36,8 +36,9 @@ shuffled passages) show `choice` retains option-side leakage: the
 frozen head still agrees with the reference on **0.875** of items after
 the passage is removed (adapted 0.806), while `score` is much more
 sensitive to evidence changes; see the paper and `manifests/` in the
-release assets. A revised manuscript prepared for arXiv submission
-reports this matched study with evidence controls and per-seed values.
+release assets. The [revised manuscript](https://sciev.org/static/sciev-paper.pdf),
+in preparation for arXiv submission, reports this matched study with
+evidence controls and per-seed values.
 Earlier v0.1.1 zero-shot numbers (SST-2 0.93, AG News 0.85)
 remain archived in the release JSONs.
 
@@ -152,7 +153,7 @@ used separately with `sciev.train --ckpt`.
 | `data/` | battery builders + benchmark converters |
 | `scripts/*.slurm` | reproducible jobs (KU HPC) |
 | `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |
-| `paper/main.tex` | archived release draft; the revised arXiv manuscript is prepared separately |
+| `paper/main.tex` | archived release draft; current manuscript served at [sciev.org](https://sciev.org/static/sciev-paper.pdf) |
 
 ## Verification
 
