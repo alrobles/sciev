@@ -1,6 +1,7 @@
-"""sciev — open System-One-style decision models on the EcoReasoner dLLM.
+"""sciev — open System-One-style decision models on frozen masked-diffusion backbones.
 
-R1 token-slot readout on ecoreasoner MdLMMoE checkpoints: state + question +
-[MASK] -> calibrated distribution over typed options (noul/choice/score).
+Specialist heads over LLaDA-8B hidden states: state + typed questions ->
+probabilities for typed options (choice/noul/score), one forward pass per
+decision, no text generation.
 """
-__version__ = "0.2.2"
+__version__ = "0.2.3"
