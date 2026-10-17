@@ -38,9 +38,13 @@ scoring ($+9$ points).
 (3)~Scaling training data $30\times$ on an out-of-domain corpus improves
 in-distribution accuracy to $0.96$ but does not transfer ($-13$ points on
 the target domain), suggesting that volume alone is insufficient. On
-public benchmarks, \ours{} reaches 0.8500 on SciFact claim verification
-and transfers zero-shot to general classification (0.9300 SST-2, 0.8537
-AG News); knowledge-intensive GPQA remains difficult (0.3125 on main).
+public benchmarks, the release heads reach 0.8500 on SciFact claim
+verification under the legacy conversion but 0.464 under the canonical
+\texttt{systemone-v2} encoding---an encoding sensitivity of the release
+heads---while evidence-corruption retraining removes the option-side
+shortcut and recovers 0.693. The heads transfer zero-shot to general classification
+(0.9300 SST-2, 0.8537 AG News); knowledge-intensive GPQA remains
+difficult (0.3125 on main).
 Candidates using LoRA domain adaptation score higher on elite choice
 but lower on GPQA and SciFact. Their head-training schedules also differ,
 so this is a candidate comparison, not an isolated causal test of DAPT.
@@ -255,8 +259,191 @@ temperature fitting. Temperatures fitted on elite dev were 0.8274,
 2.7127, and 0.9367 for choice, noul, and score. Counts and metrics describe
 our converted evaluation subsets; third-party results with unverified
 protocol equivalence are not included as directly comparable rows.
-Machine-readable values and source hashes are in \texttt{paper/results.json}.}
+The SciFact rows use the legacy single-token conversion; the
+canonical-encoding comparison and an anti-leakage variant are in
+Table~\ref{tab:antileak}. Machine-readable values and source hashes
+are in \texttt{paper/results.json}.}
 \label{tab:public}
+\end{table}
+
+\subsection{Backbone-only GPQA diagnostics}
+\label{sec:backbone-diag}
+Low GPQA accuracy could reflect either a weak decision readout or missing
+backbone knowledge. We scored the cleaned GPQA cohort with the frozen
+backbone alone, bypassing every trained head: three pseudo-log-likelihood
+variants over the option text (full-mask, true leave-one-out, and
+single-token label scoring) and two greedy masked-diffusion generation
+modes (direct 6-token answer and 64-token reasoning).
+Table~\ref{tab:backbone-diag} shows that no head-free protocol exceeds
+chance by much: the best backbone-only readout (label scoring,
+0.284/0.301) sits at or below the trained head (0.295/0.307 in the
+matched systemone-v2 study), and 64-token reasoning generation returns
+to chance. A dedicated choice head trained on our held-out
+general-MCQA battery likewise leaves GPQA at 0.27 while reaching 0.84
+on its own evaluation split. The consistent picture is that the
+backbone, not the readout, limits GPQA: the knowledge required by
+graduate-level, retrieval-resistant questions is not present in
+extractable form. We therefore treat GPQA accuracy as a backbone
+capability ceiling rather than a decision-layer defect, and the
+remaining lever is grounding — supplying evidence in the state — not
+further head optimization.
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabular}{lcc}
+\toprule
+method & main ($n{=}440$) & diamond ($n{=}193$) \\
+\midrule
+full-mask PLL            & 0.225 & 0.207 \\
+leave-one-out PLL        & 0.234 & 0.249 \\
+label scoring            & 0.284 & 0.301 \\
+prompted generation (6 tok, direct)     & 0.259 & 0.249 \\
+prompted generation (64 tok, reasoning) & 0.250 & 0.228 \\
+\midrule
+release choice head (reference)         & 0.295 & 0.307 \\
+qa-v2 choice head (reference)           & 0.273 & 0.269 \\
+\bottomrule
+\end{tabular}
+\caption{Backbone-only GPQA accuracy (no trained head), Phase-A
+diagnostics on the cleaned cohort. PLL methods score the option text
+directly; prompted modes generate an answer via masked diffusion.
+Reference rows are trained heads evaluated on the same cohort.
+Random chance is 0.25. No backbone-only method meaningfully exceeds
+the trained head, indicating a backbone knowledge ceiling rather than
+a readout bottleneck.}
+\label{tab:backbone-diag}
+\end{table}
+
+\subsection{Contrastive bi-encoder control}
+\label{sec:biencoder}
+To test whether the joint cross-encoding is itself the active
+ingredient, we trained a CLM-style contrastive arm on the same frozen
+backbone and the same training cohort: state/action projection heads
+over mean-pooled backbone vectors, bidirectional InfoNCE with
+same-question and in-batch negatives, protocol-identical held-out
+temperature and acceptance policy. At our data scale the dot product
+is far behind (Table~\ref{tab:biencoder}): 55--65 points down on the
+in-domain suites and at chance on GPQA. The finding is consistent with
+CLM-8B's own recipe, which relies on roughly $10^7$--$10^8$ contrastive
+pairs plus synthetic hard negatives; at $\sim$5$\times 10^4$ decisions,
+an option that never attends to the state cannot recover the
+interaction. The arm is a single configuration, so we claim a
+matched-scale comparison rather than a verdict on bi-encoders in
+general. A natural follow-up use --- reusing the cached embeddings as
+a cheap dot-product shortlist over decisions with more than four
+options --- is also ruled out at this scale: on the 3080-row,
+77-option banking77 suite the gold label reaches the top-4 of the
+arm's ranking only 8.9\% of the time (recall@32: 46.5\%), and
+suite-level action retrieval stays equally weak (recall@64
+15--40\%). Any K$>$4 path therefore runs through the joint head
+itself, e.g.\ option-chunked tournaments, not embedding prefiltering.
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+suite & $n$ & joint head & bi-encoder \\
+\midrule
+qa\_eval      & 5021 & 0.838 & 0.376 \\
+sci\_elite    & 448  & 0.920 & 0.263 \\
+gpqa\_main    & 440  & 0.273 & 0.241 \\
+gpqa\_diamond & 193  & 0.269 & 0.244 \\
+\bottomrule
+\end{tabular}
+\caption{Matched-architecture control: the CLM-style contrastive
+bi-encoder on our frozen backbone and training cohort versus the joint
+cross-encoded choice head evaluated on the same files
+(\texttt{runs/sci/eval\_bi\_v2\_s7331}). Selection accuracy on the
+bi-encoder's dev split plateaued at 0.371. Joint-head numbers are from
+the same qa-v2 cohort evaluation; GPQA cells remain near chance for
+both systems, consistent with the backbone ceiling of
+Table~\ref{tab:backbone-diag}.}
+\label{tab:biencoder}
+\end{table}
+
+\subsection{Grounded GPQA: evidence rescues the head}
+\label{sec:grounded-gpqa}
+The backbone ceiling of Table~\ref{tab:backbone-diag} characterizes
+\emph{closed-book} GPQA. The system's actual contract, however, is
+grounded decisions: evidence in the state, typed options. To measure
+whether the joint readout can exploit evidence at all, we built paired
+grounded variants of the cleaned GPQA cohort --- identical options and
+ordering, only the state gains an evidence block --- in two regimes:
+\emph{oracle} appends the benchmark's expert-written explanation (a
+gold-revealing upper bound), and \emph{nev} appends a non-expert
+validator's own reasoning trace (noisy; validators average roughly a
+third correct).
+
+Table~\ref{tab:grounded-gpqa} separates the failure modes cleanly. On
+GPQA-main, oracle evidence lifts the release head from 0.295 to 0.695
+and the qa-v2 head from 0.273 to 0.707: given the right document, the
+same backbone and head that sit at chance decide correctly on
+graduate-level items --- and both heads converge, so evidence use
+lives in the joint architecture, not the fine-tune. The noisy nev
+trace recovers almost nothing (0.318 vs.\ 0.295), so the oracle--nev
+gap prices retrieval quality: usable evidence must be
+explanation-grade, not topical. A real production retrieval stack
+confirms the price: BM25 top-3 passages from a 30.8M-article PubMed
+index land at 0.304 on main for the release head---below nev and
+statistically indistinguishable from closed-book (0.295)---and 0.292
+for qa-v2. Coverage is not the bottleneck (only 2/440 questions found
+no hit); the retrieved abstracts are topically adjacent rather than
+explanation-grade, and GPQA is by construction resistant to
+topical evidence. Closing the oracle gap therefore requires
+retrieval that returns reasoning-bearing text---or a corpus that
+covers physics and chemistry, which PubMed largely does not.
+GPQA-diamond resists even the oracle
+(0.326 vs.\ 0.307 baseline): on the hardest subset the residual
+failure is option discrimination, not missing knowledge. Grounding
+thus converts most of the closed-book ceiling, and what remains on
+diamond is a harder interaction limit for this backbone.
+
+The counterfactual-trained \texttt{alp25x} choice head
+(Section~\ref{sec:antileak}) is the first arm to exceed the leaky
+release on explanation-grade evidence (0.725 versus 0.695 on main
+oracle) while simultaneously dropping 3--5 points on the noisy nev
+and retrieved arms---the signature of a head that follows evidence
+when it answers the question and commits less when it does not.
+Anti-leakage training therefore did not merely remove the shortcut;
+it improved the evidence-conditioned axis the benchmark actually
+prices. The gain is attributable to the counterfactual labels, not
+to abstention alone: the uniform-only variants \texttt{alpm1} and
+\texttt{alp25p} score 0.682 and 0.686 on the same main-oracle arm,
+below both the release head and \texttt{alp25x}.
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{release head} & \multicolumn{2}{c}{qa-v2 head} &
+ \multicolumn{2}{c}{\texttt{alp25x} head} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+evidence arm & main & diamond & main & diamond & main & diamond \\
+\midrule
+closed-book (reference) & 0.295 & 0.307 & 0.273 & 0.269 & 0.275 &
+0.326 \\
+nev validator trace     & 0.318 & 0.332 & 0.284 & 0.269 & 0.280 &
+0.306 \\
+retrieved (PubMed BM25) & 0.304 & 0.340 & 0.292 & 0.278 & 0.276 &
+0.293 \\
+oracle explanation      & 0.695 & 0.326 & 0.707 & 0.244 &
+\textbf{0.725} & 0.306 \\
+\bottomrule
+\end{tabular}
+\caption{Paired grounded GPQA evaluation (\texttt{runs/sci/gpqa\_grounded\_v2}):
+evidence appended to the state, options and ordering byte-identical to
+the closed-book rows ($n{=}438/440$ main / $n{=}191/193$ diamond; 2
+questions per split had no retrieved hit). Oracle is a gold-revealing
+ceiling, nev a noisy real-world proxy, and retrieved is BM25 top-3
+abstracts from a 30.8M-article PubMed FTS5 index per question. Oracle
+grounding doubles main accuracy on both heads; neither noisy nor
+retrieved evidence moves it, and diamond stays near chance, marking
+the discrimination floor. The \texttt{alp25x} column is the
+counterfactual-trained anti-leakage choice head of
+Section~\ref{sec:antileak}: it beats the leaky release on the oracle
+arm and concedes on the noisy arms---evidence-following rather than
+prior-driven commitment.}
+\label{tab:grounded-gpqa}
 \end{table}
 
 \subsection{Backbone and adaptation candidates}
@@ -409,6 +596,163 @@ confounders to the \emph{same} question. Under shuffled evidence the
 adapted arm agrees less than the frozen arm (0.722 versus 0.825),
 consistent with better evidence filtering, matching its SciFact gain.
 
+\subsection{Anti-leakage retraining removes the shortcut}
+\label{sec:antileak}
+
+The residual leakage could reflect either a capability limit of the
+frozen backbone or a missing supervision signal. To separate the two we
+rebuild the noul and score training sets with
+\emph{evidence-corruption} counterparts: for each clean example we emit
+an empty-evidence and a shuffled-evidence row whose label is forced to
+the rejection class (\emph{false} for noul, level~0 for score)---the
+same supervision the controls measure---subsampled to a fraction
+$\rho$ of the clean count. Nothing else changes: same head, objective,
+schedule, and eval files.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llcccc}
+\toprule
+ & & & \multicolumn{2}{c}{control agreement} & \\
+\cmidrule(lr){4-5}
+arm & $\rho$ & clean acc & empty & shuffle & SciFact \\
+\midrule
+\multicolumn{6}{l}{\emph{noul} (elite $n{=}1{,}218$; controls
+$n{=}1{,}146$; SciFact $n{=}332$)}\\
+release \texttt{fr} & ---    & 0.931 & 0.810 & 0.669 & 0.464 \\
+\texttt{al}         & 1.00   & 0.896 & 0.667 & 0.667 & 0.693 \\
+\texttt{al}         & 0.25   & \textbf{0.907} & 0.667 & 0.667 &
+\textbf{0.702} \\
+\texttt{al}         & 0.0625 & 0.849 & 0.667 & 0.667 & 0.654 \\
+\midrule
+\multicolumn{6}{l}{\emph{score} (elite $n{=}1{,}218$; SciFact proxy
+$n{=}304$)}\\
+release \texttt{fr} & ---    & 0.896 & 0.575 & 0.385 & 0.757 \\
+\texttt{al}         & 1.00   & 0.755 & 0.336 & 0.334 & 0.671 \\
+\texttt{al}         & 0.25   & \textbf{0.911} & 0.336 & 0.336 &
+\textbf{0.757} \\
+\texttt{al}         & 0.0625 & 0.906 & 0.351 & 0.386 & 0.655 \\
+\bottomrule
+\end{tabular}
+\caption{Anti-leakage retraining at corruption fraction $\rho$
+(corrupted rows per clean row, split evenly between empty and
+shuffled). Control cells at the majority prior (0.667 noul, 0.336
+score) have balanced accuracy exactly 0.500: the head no longer
+answers from the option text alone. SciFact cells use the canonical
+\texttt{systemone-v2} conversions and differ from the legacy-file
+numbers in Table~\ref{tab:public}; see text.}
+\label{tab:antileak}
+\end{table}
+
+Three findings follow. First, the shortcut is a data artifact, not a
+backbone limit: for noul, corrupted rows collapse every control to the
+majority prior---balanced accuracy exactly 0.500---at every tested
+$\rho$, including $\rho{=}0.0625$ where corrupted rows are only 14\%
+of the mix. Score needs a larger dose: controls sit at the prior at
+$\rho{\geq}0.25$, but at $\rho{=}0.0625$ shuffled-evidence agreement
+leaks back to 0.386 (prior 0.334). A modest dose of the right
+supervision suffices; a token one does not.
+
+Second, the fix \emph{transfers}: on canonical SciFact noul, where the
+answer must be read off the passage, the retrained heads improve over
+the frozen release by 23--24 points (0.464$\to$0.693--0.702), while
+the leaky head sits below its own majority prior. A head trained to
+exploit option-side leakage cannot use evidence it is given; the
+retrained heads can, and on the score proxy the $\rho{=}0.25$ head
+matches the leaky release exactly (0.757).
+
+Third, $\rho{=}0.25$ is the operating point, not $\rho{=}1$. Forcing
+all corrupted rows to the rejection class shifts the training prior to
+89\% \emph{false} (noul) and 78\% level-0 (score), against eval priors
+of 67\% and 34\%, and the 14-point clean-accuracy drop on score at
+$\rho{=}1$ is mostly that threshold shift. At $\rho{=}0.25$ score
+recovers past the release (0.911 versus 0.896 clean) while holding
+exact-prior controls; at $\rho{=}0.0625$ it still matches clean but
+starts leaking again. Note also that the clean-eval accuracies of the
+leaky arms are themselves inflated by option-side cues shared with the
+training distribution, so the $\rho{=}0.25$ heads are the honest
+release candidates even where the leaky head retains a nominal edge
+(noul: 0.907 versus 0.931).
+
+\paragraph{Choice needs a different supervision.}
+The choice head has no rejection class---every row must select one of
+the candidate answers---so corrupted-evidence rows cannot reuse the
+label remap. We instead supervise the \emph{distribution}: corrupted
+rows carry a uniform soft target and are trained with the KL term
+alone (\texttt{--soft-weight 1.0}), expressing ``no usable evidence,
+no preference'' without touching the label space. A second mechanism
+targets evidence-following rather than abstention: provenance-tagged
+\emph{counterfactual} rows keep question and options but minimally
+edit the passage so that a documented distractor becomes the supported
+claim (single-token \texttt{number\_perturb}-style edits located in
+the evidence span), with the anti-leakage noul head arbitrating each
+candidate as a \emph{Proposed answer} verifier
+($\tau{=}0.6$, margin $0.2$). Two earlier donor schemes failed for
+instructive reasons: topical near-passage transplants were rejected by
+the teacher on all 230 candidates (max $p_\mathrm{true}{=}0.089$), and
+\texttt{cross\_passage} provenance splices were likewise all-uniform
+on 548 candidates---the question does not transfer to a foreign
+passage, so honest supervision there is exactly the uniform target.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lcccccc}
+\toprule
+ & & & \multicolumn{4}{c}{control agreement (chance $=0.25$)}\\
+\cmidrule(lr){4-7}
+arm & clean & hard & empty & shuf & h.emp & h.shuf\\
+\midrule
+release \texttt{fr}        & 0.980 & 0.914 & 0.875 & 0.872 & 0.795 & 0.825\\
+\texttt{alpm1} (uniform)   & 0.964 & 0.901 & 0.368 & 0.479 & 0.337 & 0.434\\
+\texttt{alp25} (+near)     & \textbf{0.980} & \textbf{0.924} & 0.469 &
+0.483 & 0.459 & 0.480\\
+\texttt{alp25p} (+prov)    & 0.942 & 0.871 & \textbf{0.299} &
+\textbf{0.264} & \textbf{0.323} & \textbf{0.318}\\
+\texttt{alp25x} (+perturb) & 0.967 & 0.898 & 0.406 & 0.398 & 0.432 &
+0.447\\
+\bottomrule
+\end{tabular}
+\caption{Choice anti-leakage arms. Empty controls carry uniform soft
+targets; ``+''arms add evidence-edited rows (near/provenance splices
+that the noul teacher arbitrated, and 256 single-token counterfactual
+edits confirmed as supporting their provenance distractor). Agreement
+with the original gold on corrupted evidence is the leakage metric;
+chance is 0.25. The dose of uniform-supervision rows drives control
+agreement toward chance, while the 256 confirmed counterfactuals
+recover 2.5 points of clean accuracy over the uniform-only arm.}
+\label{tab:antileak-choice}
+\end{table}
+
+The counterfactual mechanism works where the naive transplant fails:
+editing the passage rather than replacing it keeps the question
+applicable, and the teacher confirms the provenance-intended
+distractor in 50.5\% of editable cases (256 of 507), producing hard
+labels whose gold distribution is position-balanced. The residual gap
+between \texttt{alp25p} and \texttt{alp25x} on the controls is the
+price of commitment: a head trained to follow edited evidence commits
+more often under destroyed evidence (0.40--0.45 versus
+0.26--0.32)---still less than half the release leakage---while
+recovering clean accuracy. Which trade-off to ship depends on whether
+the deployment contract prioritizes maximal abstention
+(\texttt{alp25p}) or evidence sensitivity (\texttt{alp25x}); the
+grounded-GPQA probe in Table~\ref{tab:grounded-gpqa} measures the
+latter directly.
+
+A caveat on the SciFact cells: Table~\ref{tab:public} was produced on
+the legacy conversion ($n{=}340$), whose options are bare
+single-token \emph{true}/\emph{false} candidates scored against
+varying per-row prompt tails. The canonical \texttt{systemone-v2}
+conversion scores full-phrase options (the verdict token followed by a
+verbalized verdict sentence) under a fixed question template---the
+same format the trained heads see in production. On the same claims,
+the frozen head scores 0.850 in the legacy format but 0.464 under the
+canonical encoding: the headline number was therefore sensitive to a
+format the deployed model does not use. For reference, the third-party
+JEV evaluation scored 0.888 on the same legacy files, so the
+legacy-format comparison also holds externally. We report both rather
+than choose; the anti-leakage comparisons in Table~\ref{tab:antileak}
+are always same-file comparisons.
+
 \section{Discussion}
 
 \paragraph{What a decision layer buys.}
@@ -422,9 +766,16 @@ must be validated independently under its own data distribution.
 Readout architecture changes accuracy even with a fixed backbone, while
 candidate performance also varies with the backbone, context window,
 and training schedule. The early bw1\_sr checkpoint cannot establish a
-size-dependent knowledge ceiling. Likewise, proximity to a published
-GPQA score under another inference protocol would not prove that our
-head extracts all available knowledge.
+size-dependent knowledge ceiling. The backbone-only diagnostics of
+Table~\ref{tab:backbone-diag} close the loop on GPQA: no head-free
+scoring or generation protocol beats the trained head, so the residual
+gap is backbone knowledge, not readout capacity. Likewise, proximity to
+a published GPQA score under another inference protocol would not prove
+that our head extracts all available knowledge. Grounding closes much
+of the loop in the other direction (Table~\ref{tab:grounded-gpqa}):
+with oracle evidence the same model reaches 0.70 on GPQA-main, so the
+readout is not wasting latent competence --- but the noisy and
+diamond cells bound how much a real retriever can buy back.
 
 \paragraph{Candidate selection is not a causal adaptation study.}
 Table~\ref{tab:candidates} supports retaining the frozen heads for this
@@ -441,10 +792,20 @@ selection.
 
 \paragraph{Relation to the ecosystem.}
 Concurrent System-One implementations motivate typed decision interfaces.
-Our implementation explores a masked-diffusion backbone and deterministic
-option ordering. A numerical ranking against other systems would require
-matched dataset conversions, splits, and calibration protocols; the
-empirical tables here report only our own evaluated candidates.
+CLM-8B \cite{clm} serves the same typed-question contract from a frozen
+causal encoder whose state/action projection heads are trained
+contrastively over large state--action corpora, while our implementation
+explores a masked-diffusion backbone and deterministic option ordering;
+we additionally train a CLM-style contrastive bi-encoder on our own
+backbone and data as a matched-architecture control. Backbone diversity
+also widens the ecosystem's reach: the released CLM-8B heads are tied to
+the Qwen3-8B encoder, while this work serves the same typed-question
+contract on a non-Qwen backbone for environments where that dependency
+is excluded by model-approval or provenance policy. A numerical ranking
+against other released systems would require matched dataset
+conversions,
+splits, and calibration protocols; the empirical tables here report only
+our own evaluated candidates.
 
 \section{Limitations}
 Backbone pretraining may include benchmark-adjacent text. Heads are trained
@@ -465,6 +826,8 @@ Benchmark. COLM 2024.
 \bibitem{scifact} Wadden et al. Fact or Fiction: Verifying Scientific
 Claims. EMNLP 2020.
 \bibitem{kumar} Kumar, A. Jev, measured. Third-party benchmark report, 2026.
+\bibitem{clm} Kwok et al. Contrastive Language Models: A System One Model
+for Fast and Generalizable Decision-Making. 2026.
 \bibitem{corallike} Cao et al. Rank consistent ordinal regression for
 neural networks. 2020.
 \end{thebibliography}

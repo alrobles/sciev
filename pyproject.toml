@@ -1,6 +1,6 @@
 [project]
 name = "sciev"
-version = "0.2.3"
+version = "0.3.0"
 description = "Typed decision heads on frozen masked-diffusion backbones with held-out calibration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,7 +34,9 @@ dependencies = [
 
 [project.optional-dependencies]
 serve = ["fastapi>=0.100", "uvicorn>=0.23"]
-dev = ["pytest>=7.0"]
+data = ["datasets>=2.16"]
+adapt = ["peft>=0.13"]
+dev = ["pytest>=7.0", "fastapi>=0.100", "pandas>=1.5", "pyarrow>=12"]
 
 [project.urls]
 Homepage = "https://github.com/alrobles/sciev"

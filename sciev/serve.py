@@ -11,6 +11,7 @@ Optional REVJEV_TEMPERATURE applies a fitted temperature to every answer.
 The server binds locally; it has no auth — keep it behind localhost.
 """
 import logging
+import math
 import os
 import threading
 import time
@@ -69,6 +70,22 @@ class SystemOneRequest(BaseModel):
     state: StructuredText
     model: NonemptyString | None = None
     questions: dict[NonemptyString, Question] = Field(min_length=1)
+    temperature: float | None = Field(default=None, gt=0, le=100)
+
+
+class RankRequest(BaseModel):
+    """CLM-compatible best-of-N ranking: {context, question, answers[]}.
+
+    Implemented as a single choice decision whose option texts are the
+    candidate answers verbatim; the returned order is the calibrated
+    probability order, ties broken by candidate text.
+    """
+    model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
+    context: StructuredText
+    question: StructuredText
+    answers: list[StructuredText] = Field(min_length=2, max_length=255)
+    model: NonemptyString | None = None
+    temperature: float | None = Field(default=None, gt=0, le=100)
 
 
 class _LegacyR1Engine:
@@ -115,11 +132,14 @@ class _LegacyR1Engine:
         return {"model": self.model_id, **self.metadata(), "available_types": list(QUESTION_TYPES),
                 "limits": _limits(self.max_len - 1, 120, self.max_questions, self.max_len)}
 
-    def answer(self, state, questions, *, model=None):
+    def answer(self, state, questions, *, model=None, temperature=1.0):
         from .decisions import encode_question, render_value
         from .readout import build_sequence, noul_id_sets, option_id_sets, r1_logits
 
         _validate_request(state, questions, model, self.model_id, self.max_questions)
+        if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+                or not math.isfinite(temperature) or not 0 < temperature <= 100):
+            raise InputValidationError("temperature must be a finite number in (0, 100]")
         with self._lock, torch.inference_mode():
             encoded = []
             for qid, question in questions.items():
@@ -150,11 +170,13 @@ class _LegacyR1Engine:
             for qid, question, row, ids, mask_position, option_sets in encoded:
                 logits = r1_logits(self.backbone, torch.tensor(ids, dtype=torch.long, device=self.device),
                                    mask_position, option_sets, temperature=1.0)
-                probabilities = _probabilities(logits, len(option_sets), self.temperature)
+                probabilities = _probabilities(logits, len(option_sets),
+                                               self.temperature * temperature)
                 answers[qid] = _format_answer(row, question, probabilities)
                 input_tokens += len(ids)
         return {"model": self.model_id, "answers": answers,
-                "usage": {"input_tokens": input_tokens, "output_tokens": 0, "forward_passes": len(encoded)},
+                "usage": {"input_tokens": input_tokens, "output_tokens": 0,
+                          "forward_passes": len(encoded), "billing_units": len(encoded)},
                 "metadata": self.metadata()}
 
 
@@ -180,7 +202,7 @@ def create_app(engine=None):
         yield
 
     api = FastAPI(
-        title="Sciev", version="0.1.1", lifespan=lifespan,
+        title="Sciev", version="0.2.3", lifespan=lifespan,
         description=("Typed non-generative decisions. confidence is normalized-top concentration, not P(correct). "
                      "max_probability is separate. Calibration status and encoding are reported explicitly. "
                      "Local-only: this server has no authentication."))
@@ -201,6 +223,10 @@ def create_app(engine=None):
                     raise HTTPException(status_code=503, detail="Decision model is unavailable; check server configuration and logs.")
         return api.state.engine
 
+    @api.get("/health")
+    def health():
+        return {"status": "ok"}
+
     @api.get("/v1/models")
     def models():
         return get_engine().model_info()
@@ -211,12 +237,44 @@ def create_app(engine=None):
         started = time.perf_counter()
         questions = {qid: question.model_dump() for qid, question in req.questions.items()}
         try:
-            result = current.answer(req.state, questions, model=req.model)
+            result = current.answer(req.state, questions, model=req.model,
+                                    temperature=req.temperature or 1.0)
         except UnknownModelError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except InputValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {**result, "latency_ms": round((time.perf_counter() - started) * 1000, 3)}
+
+    @api.post("/v1/rank")
+    def rank(req: RankRequest):
+        from .decisions import render_value
+
+        current = get_engine()
+        started = time.perf_counter()
+        try:
+            candidates = [render_value(candidate, "answers entry") for candidate in req.answers]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if len(set(candidates)) != len(candidates):
+            raise HTTPException(status_code=422,
+                                detail="rank requires distinct candidates; duplicates are indistinguishable")
+        criteria = {candidate: None for candidate in candidates}
+        question = {"type": "choice", "instructions": req.question, "criteria": criteria}
+        try:
+            result = current.answer(req.context, {"rank": question}, model=req.model,
+                                    temperature=req.temperature or 1.0)
+        except UnknownModelError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except InputValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        probabilities = result["answers"]["rank"]["probabilities"]
+        order = sorted(candidates, key=lambda candidate: (-probabilities[candidate], candidate))
+        ranked = [{"rank": index + 1, "candidate": candidate,
+                   "prob": probabilities[candidate]}
+                  for index, candidate in enumerate(order)]
+        return {"model": result["model"], "ranked": ranked,
+                "usage": result["usage"],
+                "latency_ms": round((time.perf_counter() - started) * 1000, 3)}
 
     return api
 

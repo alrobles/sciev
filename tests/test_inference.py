@@ -86,6 +86,7 @@ def test_r2_heads_all_types_usage_and_inference_mode():
         "input_tokens": sum(ids.numel() for ids in engine.backbone.seen),
         "output_tokens": 0,
         "forward_passes": 3,
+        "billing_units": 3,
     }
     assert result["usage"]["input_tokens"] > len(FakeTokenizer().encode("observation"))
     assert not engine.backbone.training

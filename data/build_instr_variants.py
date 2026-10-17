@@ -13,11 +13,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
-from sciev.data import write_dataset
-from sciev.decisions import encode_question, validate_decision_row
+from sciev.data import stable_json, write_dataset
+from sciev.decisions import InputOverflow, encode_question, validate_decision_row
+from sciev.protocol import file_fingerprint
 
 MAX_CTX, MAX_OPT = 640, 120
 META_KEYS = ("split_group", "group_id", "pid", "source", "source_file",
@@ -26,65 +28,75 @@ META_KEYS = ("split_group", "group_id", "pid", "source", "source_file",
              "evidence_regime", "task", "split")
 
 
+def build_variant(records, tok, instruction, index, max_ctx=MAX_CTX, max_opt=MAX_OPT,
+                  exclude_overflow=False):
+    ids, texts, exclusions = [], [], []
+    for rec in records:
+        if len(rec["questions"]) != 1:
+            raise ValueError("variant builder requires one question per state")
+        qid, question = next(iter(rec["questions"].items()))
+        if question.get("type") != "choice":
+            raise ValueError("instruction variants require choice questions")
+        variant = {"type": "choice", "instructions": instruction,
+                   "criteria": question["criteria"], "label": question["label"]}
+        try:
+            encoded = encode_question(tok, rec["state"], variant, max_ctx=max_ctx, max_opt=max_opt)
+        except InputOverflow:
+            if not exclude_overflow:
+                raise
+            exclusions.append({"qid": qid, "sample_id": rec.get("sample_id"), "reason": "input_overflow"})
+            continue
+        metadata = {key: question.get(key, rec.get(key)) for key in META_KEYS
+                    if key in question or key in rec}
+        metadata["instruction_variant"] = instruction
+        identity = hashlib.sha256(stable_json(encoded).encode()).hexdigest()
+        qid = f"{qid}_v{index}"
+        row = validate_decision_row({**metadata, **encoded, "gold": encoded["option_keys"].index(question["label"]),
+                                     "qid": qid, "decision_id": identity})
+        ids.append(row)
+        text_meta = {**metadata, "encoding": row["encoding"], "schema_version": row["schema_version"]}
+        texts.append({**text_meta, "state": rec["state"], "questions": {
+            qid: {**text_meta, **variant, "kind": row["kind"], "option_keys": row["option_keys"], "decision_id": identity}}})
+    return ids, texts, exclusions
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--text-file", required=True)
     ap.add_argument("--out-prefix", required=True)
-    ap.add_argument("--instructions", required=True,
-                    help="| separated instruction variants")
+    ap.add_argument("--instructions", required=True, help="| separated instruction variants")
+    ap.add_argument("--include-original", action="store_true")
+    ap.add_argument("--exclude-overflow", action="store_true")
+    ap.add_argument("--max-ctx", type=int, default=MAX_CTX)
+    ap.add_argument("--max-opt", type=int, default=MAX_OPT)
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     args = ap.parse_args()
-
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(args.tokenizer)
-    variants = [s.strip() for s in args.instructions.split("|") if s.strip()]
-
-    records = [json.loads(line) for line in open(args.text_file)]
-    prefix = Path(args.out_prefix)
-    for vi, instr in enumerate(variants, start=1):
-        id_rows, text_rows = [], []
-        skipped = 0
-        for rec in records:
-            questions = rec["questions"]
-            assert len(questions) == 1, "variant builder expects one question per state"
-            qid, q = next(iter(questions.items()))
-            criteria = q["criteria"]
-            option_keys = q.get("option_keys", list(criteria))
-            gold = option_keys.index(q["label"])
-            vq = {"type": "choice", "instructions": instr,
-                  "criteria": criteria, "label": q["label"]}
-            try:
-                enc = encode_question(tok, rec["state"], vq,
-                                      max_ctx=MAX_CTX, max_opt=MAX_OPT)
-            except Exception:
-                skipped += 1
-                continue
-            meta = {k: rec[k] for k in META_KEYS if k in rec}
-            meta["instruction_variant"] = instr
-            import hashlib
-            from sciev.data import stable_json
-            did = hashlib.sha256(stable_json(enc).encode()).hexdigest()
-            row = validate_decision_row({**meta, **enc, "gold": gold,
-                                         "qid": f"{qid}_v{vi}",
-                                         "decision_id": did})
-            id_rows.append(row)
-            tq = {**{k: rec[k] for k in META_KEYS if k in rec},
-                  "encoding": row["encoding"], "schema_version": row["schema_version"],
-                  "instruction_variant": instr}
-            text_rows.append({**tq, "state": rec["state"],
-                              "questions": {f"{qid}_v{vi}": {**tq, **vq,
-                                                            "kind": row["kind"],
-                                                            "option_keys": row["option_keys"],
-                                                            "decision_id": did}}})
-        out = Path(f"{prefix}_instr{vi}.jsonl")
-        write_dataset({out: id_rows, out.with_name(f"{out.stem}_text.jsonl"): text_rows},
-                      out.with_suffix(".manifest.json"),
-                      {"builder": "build_instr_variants",
-                       "instruction_variant": instr,
-                       "source_text_file": args.text_file,
-                       "counts": {"rows": len(id_rows),
-                                  "overflow_excluded": skipped}})
-        print(f"[v{vi}] {instr!r} -> {out} ({len(id_rows)} rows, {skipped} overflow)")
+    tok = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
+    with Path(args.text_file).open() as stream:
+        records = [json.loads(line) for line in stream if line.strip()]
+    variants = [text.strip() for text in args.instructions.split("|") if text.strip()]
+    if not records or not variants:
+        ap.error("records and instruction variants must be nonempty")
+    if args.include_original:
+        original = {question["instructions"] for rec in records for question in rec["questions"].values()}
+        if len(original) != 1:
+            ap.error("original instructions differ across the source cohort")
+        variants.insert(0, original.pop())
+    outputs = []
+    for index, instruction in enumerate(variants, start=0 if args.include_original else 1):
+        ids, texts, exclusions = build_variant(records, tok, instruction, index,
+                                               args.max_ctx, args.max_opt, args.exclude_overflow)
+        path = Path(f"{args.out_prefix}_instr{index}.jsonl")
+        manifest = {"builder": "build_instr_variants", "builder_version": 2,
+                    "instruction_variant": instruction, "source_text_file": file_fingerprint(args.text_file),
+                    "tokenizer": args.tokenizer, "max_ctx": args.max_ctx, "max_opt": args.max_opt,
+                    "exclusions": exclusions, "counts": {"input_records": len(records), "rows": len(ids)}}
+        outputs.append((path, ids, texts, manifest))
+    for path, ids, texts, manifest in outputs:
+        write_dataset({path: ids, path.with_name(f"{path.stem}_text.jsonl"): texts},
+                      path.with_suffix(".manifest.json"), manifest)
+        print(f"[wrote] {path}: {len(ids)} rows", flush=True)
 
 
 if __name__ == "__main__":

@@ -235,13 +235,16 @@ class DecisionEngine:
                 "heads": {kind: asdict(self.settings[kind]) for kind in QUESTION_TYPES if kind in self.heads},
                 "limits": _limits(self.max_ctx, self.max_opt, self.max_questions, self.backbone.seq_len)}
 
-    def answer(self, state, questions, *, model=None):
+    def answer(self, state, questions, *, model=None, temperature=1.0):
         from .decisions import (
             decision_logits, decision_prediction, decision_probabilities,
             encode_question, prepare_decision,
         )
 
         _validate_request(state, questions, model, self.model_id, self.max_questions)
+        if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+                or not math.isfinite(temperature) or not 0 < temperature <= 100):
+            raise InputValidationError("temperature must be a finite number in (0, 100]")
         with self._lock, torch.inference_mode():
             encoded = []
             for qid, question in questions.items():
@@ -266,14 +269,16 @@ class DecisionEngine:
                         self.backbone, self.heads[row["kind"]], row["ctx"], row["opts"], self.device,
                         mode=settings.mode, layers=settings.layers,
                         canonical=settings.canonical_order, strict=True)
-                    probabilities = decision_probabilities(logits, settings.temperature)
+                    probabilities = decision_probabilities(
+                        logits, settings.temperature * temperature)
                     selected_index = decision_prediction(logits, prepared)
                 except (ValueError, FloatingPointError) as exc:
                     raise RuntimeError("R2 inference did not produce finite, correctly shaped logits") from exc
                 answers[qid] = _format_answer(row, question, probabilities, selected_index=selected_index)
                 input_tokens += len(prepared.ids)
         return {"model": self.model_id, "answers": answers,
-                "usage": {"input_tokens": input_tokens, "output_tokens": 0, "forward_passes": len(encoded)},
+                "usage": {"input_tokens": input_tokens, "output_tokens": 0,
+                          "forward_passes": len(encoded), "billing_units": len(encoded)},
                 "metadata": self.metadata()}
 
     @classmethod

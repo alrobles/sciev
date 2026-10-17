@@ -1,8 +1,11 @@
-# Model Card — Sciev v0.2.2
+# Model Card — Sciev v0.3.0
 
-The `fr_*` frozen head weights are unchanged from the v0.2 weight set;
-v0.2.2 is a packaging refresh that ships manifests, checksums and
-audited metrics. The `da_*` adapted heads are published as an
+v0.3.0 ships **anti-leakage heads** for `noul` and `score`: `alp25_*`
+are the v0.2 `fr_*` recipe retrained on a ρ=0.25 evidence-corruption
+mixture, so corrupted evidence (removed or shuffled passages) is
+rejected rather than answered from option-side cues. `choice` is
+unchanged (`fr_choice.pt`) — its leakage is an evaluation finding, not
+supervisable with this construction. The `da_*` adapted heads remain an
 experimental arm and are not the released recipe.
 
 > **Sciev** (`sci`·ence + `ev`·aluation): open System-One scientific
@@ -34,8 +37,10 @@ Three decision types:
   - `fr_choice`: **AttnPoolHead**, 67,166,209 parameters (269.4 MB) — a
     learned query pools each option span at hidden-state outputs
     (-1,-9,-17,-25) ≡ layers {32,24,16,8}.
-  - `fr_noul`, `fr_score`: 16,793,601 parameters (68.6 MB) each — MLP over
-    final-layer mean-pooled spans; score adds an ordinal auxiliary loss.
+  - `alp25_noul`, `alp25_score`: 16,793,601 parameters (68.6 MB) each —
+    MLP over final-layer mean-pooled spans; score adds an ordinal
+    auxiliary loss. Same architecture as `fr_*`; only the training
+    mixture changed (see *Anti-leakage retraining*).
 - **Canonical ordering**: deterministic token-content sorting gives the
   same input sequence for distinct options under permutation. Duplicate or
   truncated-to-identical options are rejected, not silently disambiguated.
@@ -44,13 +49,38 @@ Three decision types:
   the checkpoint SHA-256. Refit with `--r2-temp-fit-decisions` or pass
   `--r2-temp`. Temperature changes probabilities, not the argmax.
 
-## Results (matched v0.2 study, `systemone-v2`)
+## Results (v0.3 anti-leakage heads, `systemone-v2`, seed 7331)
+
+`alp25` heads vs the v0.2 `fr` heads on the same evaluation files.
+Control rows report *agreement with the original reference* under
+corrupted evidence — the rejection class is the desired behavior, so
+values at the class prior (noul 0.667, score 0.336) indicate full
+rejection, not failure.
+
+| eval | type | v0.3 `alp25` | v0.2 `fr` |
+|---|---|---:|---:|
+| sci battery elite (clean) | noul | 0.907 | 0.931 |
+| sci battery elite (clean) | score | **0.911** | 0.896 |
+| empty-evidence agreement | noul | **0.667** | 0.810 |
+| shuffled-evidence agreement | noul | **0.667** | 0.669 |
+| empty-evidence agreement | score | **0.336** | 0.575 |
+| shuffled-evidence agreement | score | **0.336** | 0.385 |
+| SciFact dev (canonical encoding) | noul | **0.702** | 0.464 |
+| SciFact dev | score | 0.757 | 0.757 |
+
+Dev-fitted temperatures: 1.403 (noul), 0.7641 (score); `choice` keeps
+`fr_choice` with its v0.2 calibration. `choice` controls are unchanged
+from the v0.2 table below — option-side leakage there is documented in
+the manuscript, and a counterfactual-trained arm (`alp25x`) exists as
+experimental evidence but is not in this release.
+
+### Matched v0.2 study (3 seeds)
 
 Mean ± sample SD across three head-training seeds (7331–7333); same head
 recipe for both arms. `da` uses one experimentally adapted backbone —
 see *Domain adaptation* for why this is not a causal DAPT estimate.
 
-| eval | type | n | fr (release) | da (experimental) |
+| eval | type | n | fr (v0.2 heads) | da (experimental) |
 |---|---|---:|---:|---:|
 | sci battery | choice | 448 | **0.970 ± 0.017** | 0.961 ± 0.011 |
 | sci battery | noul | 1200 | **0.925 ± 0.006** | 0.913 ± 0.007 |
@@ -141,6 +171,14 @@ in training or temperature fitting — public-benchmark numbers are
 eval-only. The older `elite-v1` set is retired from headline claims due
 to the truncation defect above.
 
+The v0.3 `alp25` heads add an **anti-leakage mixture**: for each clean
+training row, 0.125 empty-evidence and 0.125 shuffled-evidence
+counterparts whose label is forced to the rejection class
+(`label_status=antileak_train`, evidence-control rows with provenance
+fields retained). Choice is excluded — a corrupted-evidence choice row
+has no valid rejection label; the manuscript documents that residual
+leakage instead.
+
 ## Domain adaptation (DAPT)
 
 `da_*` heads pair the `scientific-v1` recipe with one archival LoRA
@@ -158,6 +196,11 @@ uniform effect. Caveats on the historical adapter run:
 ## Reproduce
 
 ```bash
+python -m sciev.eval --ckpt release/alp25_noul.pt \
+    --decision-type noul \
+    --r2-mode spanpool --r2-layers=-1 --canonical-order \
+    --r2-temp-fit-decisions my_decisions_dev.jsonl \
+    --decisions-eval my_decisions.jsonl --device cuda --out eval.json
 python -m sciev.eval --ckpt release/fr_choice.pt \
     --decision-type choice \
     --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
@@ -173,9 +216,17 @@ SST-2, AG News, Enron, Banking77). Battery builder:
 
 An open System-One-style decision layer on a **masked-diffusion**
 backbone, with deterministic option presentation and a scientific
-training specialty. Other open systems (e.g., OpenJev on DiffusionGemma)
-also use diffusion backbones; this release makes no matched-protocol
-performance ranking against other systems.
+training specialty. The ecosystem also includes OpenJev on
+DiffusionGemma and Contrastive-LM's CLM-8B — a contrastive bi-encoder
+(InfoNCE state×action) over frozen Qwen3-8B serving the same
+typed-question contract. Within it, sciev is the member on a non-Qwen
+backbone with joint state×option encoding, hashed data manifests, and
+fitted calibration/acceptance policies — useful where the
+Qwen3-8B-tied CLM stack is excluded by model-approval or provenance
+policy. This release makes no matched-protocol performance ranking
+against other systems; `sciev/biencoder.py` re-implements the CLM
+architecture on our own backbone and data as a matched-architecture
+comparison arm.
 
 ## License
 

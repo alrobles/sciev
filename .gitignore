@@ -9,3 +9,8 @@ wandb/
 .pytest_cache/
 runs/e0/
 build/
+dist/
+evals/*.log
+paper/main.aux
+paper/main.log
+paper/main.out

@@ -14,10 +14,10 @@ todos los cambios de accuracy al DAPT.
 
 | recurso | ubicación |
 |---|---|
-| Repos | release público `github.com/alrobles/sciev` · dev privado `github.com/alrobles/sciev-devel` · local `~/GitHub/sciev` · cluster `/beegfs/a474r867/sciev` |
+| Repos | release público `github.com/alrobles/sciev` · dev privado `github.com/alrobles/sciev-devel` · local `~/GitHub/sciev` · cluster `/kuhpc/scratch/kbs/a474r867/sciev` |
 | Repo hermano (backbone propio) | `github.com/alrobles/ecoreasoner` · cluster `/beegfs/a474r867/ecoreasoner` |
 | Datos (cluster) | `data/sci_battery{,_v2}`, `data/bench_external/` |
-| Runs/checkpoints | `/beegfs/a474r867/sciev/runs/sci/` |
+| Runs/checkpoints | `/kuhpc/scratch/kbs/a474r867/sciev/runs/sci/` |
 | Notas internas (gitignored) | `runs/sci/ABLATION.md`, `runs/sci/STRATEGY.md` |
 | Paper draft | `paper/main.tex` |
 | Reporte cruzado en ecoreasoner | `docs/SCIEV-PARALLEL-WORK.md` |
@@ -63,6 +63,7 @@ LLaDA-8B-Instruct (congelado, bidireccional por construcción)
 | 9 | Heads `da_*` sobre backbone adaptado + re-eval | ✅ hecho — **DAPT no supera criterio → release = `c_*`** |
 | 10 | Baseline ecoreasoner | ✅ `eb_*` sobre bw1_sr — checkpoint g20, control temprano (ver §7) |
 | 11 | Paper arXiv | 🔄 `paper/main.tex`: Tablas 3/4 auditadas, PDF verificado |
+| 12 | Fase qa-v2 (diagnóstico GPQA + batería paramétrica) | 🔄 en curso — ver §7c |
 
 ## 5. Resultados consolidados
 
@@ -252,6 +253,253 @@ la pérdida en score es ruidosa (sd hasta ±.11 → el −14.4pt de una
 corrida era en parte fluctuación). Paper: `tab:matched` ahora reporta
 mean±sd.
 
+### 7c. Fase qa-v2 — diagnóstico GPQA + batería paramétrica (en curso)
+
+Ataca la debilidad conocida (GPQA ~0.30) en dos frentes:
+
+**Phase-A** (`scripts/gpqa_phase_a.slurm`, array 0-7): mide el
+conocimiento que ya porta el backbone crudo sobre la cohorte limpia
+GPQA (440 main / 193 diamond) — PLL full-mask, leave-one-out verdadero
+y label-scoring (`scripts/eval_llada_pll.py`), más generación por
+difusión greedy directa-6tok y razonamiento-64tok
+(`scripts/eval_llada_prompted.py`). Lectura pre-registrada:
+PLL ≈ head → el cuello de botella es el backbone (→ compuerta LoRA);
+PLL ≫ head → el readout es la palanca; prompted-64 ≫ PLL → la
+generación extrae lo que el scoring no (→ destilar razonamiento).
+
+**Resultados Phase-A** (`runs/sci/phase_a_v2/`, 27-sep — backbone crudo,
+sin head, accuracy):
+
+| método | main (n=440) | diamond (n=193) |
+|---|---:|---:|
+| full-mask PLL | 0.225 | 0.207 |
+| leave-one-out PLL | 0.234 | 0.249 |
+| label scoring | 0.284 | 0.301 |
+| prompted-6 (directo) | 0.259 | 0.249 |
+| prompted-64 (razonamiento) | 0.250 | 0.228 |
+| head v0.2 (referencia) | 0.295 | 0.307 |
+| head qa-v2 (§7c) | 0.273 | 0.269 |
+
+**Veredicto**: el mejor readout backbone-only (label, 0.284/0.301) ≈
+head (0.295/0.307) — el backbone no esconde conocimiento GPQA que el
+readout desperdicie; la head de hecho exprime *más* señal que el
+scoring directo. prompted-64 ≈ azar (0.25) — la generación tampoco
+extrae nada. Y la head qa-v2 entrenada sobre ~50k MCQA no movió GPQA
+(0.27) aunque domina su dominio (qa_eval 0.838, sci_elite 0.920 —
+`runs/sci/eval_qa_v2_s7331/`). GPQA es un **capability ceiling de
+LLaDA-8B**, no un defecto del decision layer — resultado negativo
+limpio que refuerza el framing "evidence-grounded" del producto.
+
+**Consecuencia para la compuerta LoRA**: el criterio <0.38 dispararía,
+pero fue diseñada para el mundo "readout bottleneck". Con Phase-A
+cerrado, LoRA sobre datos MCQA no inyecta conocimiento graduado —
+**no disparar** salvo que se reformule como DAPT sobre corpus de
+texto científico (inyección de conocimiento, techo esperado aun así
+bajo para preguntas google-proof). El lever real para GPQA es
+evidencia en el `state` (GPQA+RAG = el caso de uso grounded del
+producto).
+
+**Batería qa_choice v3** (`data/build_qa_choice.py`,
+`scripts/qa_build.slurm` → `data/qa_battery_v3`): ARC, OpenBookQA, SciQ,
+MMLU-aux (20k), MedMCQA (20k train + 1k dev). Partición global por
+grupo de pregunta con prioridad eval > dev > train; pantalla GPQA sin
+etiquetas (Jaccard ≥ 0.6 sobre los CSVs main/diamond/extended, no solo
+la cohorte limpia); grupos con golds conflictivos eliminados enteros;
+dev repartido a roles select/calibration/policy por hash de grupo.
+Auditoría de disjointness y digests: `scripts/audit_qa_dataset.py`.
+
+**Train** (`sciev/qa_train.py`, `qa_v2_train.slurm`): head AttnPool
+spanpool choice; GPQA vetado de train y selección
+(`require_training_data`); resume exacto (optimizer + RNG + order);
+mejor checkpoint por (acc, −nll) sobre subset de selección
+determinista; modo `--smoke` verifica que `decision.pt` recarga a las
+mismas probabilidades.
+
+**Compuerta LoRA** (`scripts/qa_lora_gate.py`): criterio predefinido —
+solo si TODAS las acc frozen-head en GPQA-main (cohorte limpia, n=440)
+quedan bajo 0.38 se somete `qa_v2_train.slurm` con LORA_RANK=8,
+4000 steps, init desde la head frozen, seguido de `qa_v2_eval.slurm`
+con dependencia `afterok`. GPQA informa esta decisión → los números
+GPQA resultantes son selection-informed (ya declarado en MODEL_CARD).
+
+**Eval** (`sciev/qa_eval.py`, `qa_v2_eval.slurm`): temperatura en el
+split calibration, política de aceptación en el split policy
+(disjuntos), evaluación en gpqa main/diamond + qa_eval + sci_elite con
+chequeos checkpoint/selection/evaluation (`protocol_version` 2);
+rechaza checkpoints con presupuesto de entrenamiento incompleto.
+
+**Ensemble** (`scripts/ensemble_instr_variants.py` +
+`gpqa_build_variants`/`gpqa_ensemble_v2`/`gpqa_aggregate_v2.slurm`):
+variantes de instrucción unidas por identidad
+(split_group + option_keys), alineación por contenido (no posición),
+CI bootstrap por grupo de pregunta, política de aceptación ajustada en
+dev-evals disjuntas.
+
+**Brazo CLM-style** (`sciev/biencoder.py`, `scripts/bi_v2.slurm`):
+apareció CLM-8B (Contrastive-LM, Apache-2.0) — otro System-One abierto
+con API TypeSafe-compatible: bi-encoder contrastivo (InfoNCE state×
+action) sobre Qwen3-8B congelado, 60M pares Nemotron + 30M hard
+negatives sintéticos + 1M trayectorias agénticas. Sus pesos requieren
+el encoder Qwen3-8B → **fuera de alcance** (restricción del usuario:
+nada de pesos Qwen). En su lugar implementamos su ARQUITECTURA como
+brazo controlado sobre LLaDA: mismos datos qa-v2, mismas cohortes → la
+comparación joint-encoding vs dot-product queda pareada por backbone y
+datos (el confound Qwen-vs-LLaDA y 60M-vs-propios se declara, no se
+mezcla). Embeddings cacheados por content-hash (backbone congelado →
+head training sin forwards de backbone); InfoNCE bidireccional con
+distractores same-question como hard negatives + in-batch. Eval bajo
+protocolo v2 con temperatura en calibration y política en policy.
+Además `serve.py` gana paridad de wire-format: `temperature` por
+request (compone con la calibrada), `POST /v1/rank` (best-of-N sobre
+candidatos verbatim, implementado como decisión choice) y `GET
+/health`.
+
+**Resultado del brazo** (`runs/sci/eval_bi_v2_s7331/`, job 30929246 —
+embed 14 shards ~250k vectores, train 4000 pasos en 53s sobre vectores
+cacheados, selección plateau 0.371@step2500): el dot-product pierde
+feamente contra el encoding conjunto a nuestra escala de datos:
+
+| suite | bi-encoder | head conjunta |
+|---|---:|---:|
+| qa_eval | 0.376 | 0.838 |
+| sci_elite | 0.263 | 0.920 |
+| gpqa_main | 0.241 | 0.295 |
+| gpqa_diamond | 0.244 | 0.307 |
+
+Lectura: CLM necesitó 60M pares + 30M hard negatives + 1M trayectorias
+para que el bi-encoder funcione — es una arquitectura data-hungry; a
+~50k decisiones, el state y la opción que nunca se atienden entre sí
+no alcanzan. Valida el joint encoding como diseño, no solo como
+elección. Una configuración (layer=-1 mean-pool, proj 512): el claim
+es "a escala pareada", no "bi-encoders no sirven".
+
+**Fase-B1 — prefiltro K>4 descartado con datos** (`runs/sci/
+recall_bi_v2_s7331/`, job 30996734): la idea de reusar el cache como
+shortlist barata se midió y no sobrevive. En banking77 (3080 filas ×
+77 labels — el test bed K>4 real) el gold cae en el top-k del
+dot-product:
+
+| k | 1 | 4 | 8 | 16 | 32 |
+|---|---:|---:|---:|---:|---:|
+| recall@k | 0.019 | 0.089 | 0.157 | 0.256 | 0.465 |
+
+Un prefiltro top-4 perdería el gold el 91% de las veces (se necesita
+recall@4 ≳ 0.85); ni siquiera top-32 cubre la mitad. El brazo se
+entrenó en decisiones de 4 opciones — nunca aprendió a separar 77
+intents finos. En retrieval global (pool=suite, 746–15,460 acciones
+únicas) recall@64 = 0.15–0.40: tampoco sirve como retriever general.
+La vía K>4 que queda es chunked-tournament con la propia head
+conjunta, no prefiltrado por embeddings.
+
+**Fase-B2 — GPQA grounded** (`runs/sci/gpqa_grounded_v2/`, job
+31029331): variantes pareadas del cohort limpio — mismas opciones y
+orden (byte-idénticas), solo `ctx` gana un bloque `Evidence:`.
+`oracle` = explicación experta del benchmark (cota superior revela-
+gold); `nev` = primera traza no-vacía `Explanation_NEV_{1,2,3}` de un
+validator no-experto (ruidosa; ~1/3 aciertan). Builder:
+`data/build_gpqa_grounded.py` →
+`data/bench_external/gpqa/systemone-v2/gpqa_{main,diamond}_choice_eval_{oracle,nev}.jsonl`
+(440/440 y 193/193 filas, ≤5 ctx-truncados a max_ctx=896).
+
+| evidencia | c_choice main | c_choice diamond | qa_v2 main | qa_v2 diamond |
+|---|---:|---:|---:|---:|
+| closed-book | 0.295 | 0.307 | 0.273 | 0.269 |
+| nev | 0.318 | 0.332 | 0.284 | 0.269 |
+| oracle | **0.695** | 0.326 | **0.707** | 0.244 |
+
+Lectura: (1) la head conjunta SÍ explota evidencia — oracle duplica
+main y ambas heads convergen (0.695≈0.707), así que el uso de
+evidencia vive en la arquitectura, no en el fine-tune; (2) nev
+recupera casi nada → el gap oracle−nev tasa el costo del ruido: el
+retrieval útil debe ser de grado explicativo; (3) diamond resiste
+hasta al oracle → en el subconjunto más duro el residual es
+discriminación de opciones, no conocimiento. El lever GPQA real es
+retrieval de calidad alimentando `state` — eso es exactamente el
+producto grounded de sciev.
+
+**Posicionamiento** (revisado: pertenencia, no competencia): el
+objetivo no es rivalizar con CLM sino mantener a sciev dentro del
+ecosistema System-One que CLM acaba de solidificar — mismo contrato
+wire (`/v1/systemone`, `/v1/rank`) para que harnesses y clientes
+TypeSafe-style nos alcancen igual. Nuestro sitio en el ecosistema: el
+miembro masked-diffusion sobre backbone no-Qwen (útil donde las listas
+de modelos aprobados excluyen Qwen3-8B) con encoding conjunto
+state×option (README §ecosystem). Alcance honesto declarado: CLM
+conserva ventaja de latencia (cache de embeddings, revisita sub-ms) y
+K irrestricto; nuestro release sigue ≤4 opciones. El brazo pareado
+documenta la comparación arquitectónica *dentro* del ecosistema.
+
+### 7d. Fase C2 — anti-leakage retrain (noul/score)
+
+Los controles de evidencia (§7b) midieron el leak pero no lo corrigen:
+con evidencia destruida, noul responde desde su prior de mayoría
+(empty 0.81 / shuffle 0.67 vs azar ~0.60) y score retiene acuerdo
+parcial. `data/build_antileak_train.py` reutiliza
+`make_evidence_controls` pero remapea el gold a rechazo
+(noul→índice 1 = "false"/no; score→índice 0 = nivel más bajo de la
+rúbrica) y etiqueta las filas `label_status=antileak_train`,
+conservando el marcador `evidence_control` y los campos
+`reference_*` como provenance. Choice queda fuera de alcance: una
+fila choice con evidencia corrupta no tiene gold de rechazo válido —
+el leak de opciones es un finding de evaluación, no supervisión
+entrenable (la vía es teacher de distractores same-question).
+
+`scripts/antileak_v2.slurm` construye los controles desde
+`sci_decisions_train_text.jsonl`, los mezcla 1:1:1 con el train
+limpio (`sci_{kind}_train.jsonl` + empty + shuffle), re-entrena
+`c_noul_al`/`c_score_al` con la receta de release `c_*` (mlp
+spanpool, canonical, freeze, 3000 pasos, head_lr 3e-4, warmup 200;
+score + `--ordinal 1.0`), y evalúa batería limpia + ambos controles
+con `--train-reference` apuntando al mix real (audit de
+disjointness) y temp-fit en dev limpio. Criterio de éxito:
+el agreement-with-reference en los controles cae hacia la base
+rate de la clase de rechazo entre los labels de referencia (si la
+head siempre rechaza evidencia corrupta, solo coincide con la
+referencia cuando ésta ya era la clase de rechazo — ~0.667 para
+noul en esta cohorte), sin colapsar la batería limpia.
+
+**Resultados noul** (`runs/sci/antileak_v2/`, jobs 31043205 +
+31044968; el segundo resubió tras el fix `criteria=None` y murió
+por time-limit a mitad del primer eval de score — resubmit
+31053405 corre los 3 evals de score con skip-guards):
+
+| eval | fr (§7b) | c_noul_al |
+|---|---:|---:|
+| clean noul | 0.9308 | 0.8958 |
+| ctl_empty agree | 0.810 | 0.6667 |
+| ctl_shuffle agree | 0.669 | 0.6667 |
+
+Lectura: agreement cae a exactamente la base rate "false" (0.667)
+en ambos modos — firma de rechazo uniforme de evidencia corrupta,
+no de prior residual (un colapso a mayoría habría arrastrado clean
+a ~0.6; se mantiene 0.896). El costo es −3.5pt en clean
+(sobre-rechazo parcial o varianza de seed única). ECE alto en
+controles (~0.32) es artefacto esperado: la head rechaza
+confiada lo que el archivo etiqueta por referencia. Los JSONs de
+noul quedaron sin `train_overlap_check` (corrieron antes del flag);
+los de score lo traerán. `c_noul_al_stale/` conserva el head
+pre-fix para auditoría.
+
+**Resultados score** (resubmit 31053405, completado 2026-10-08):
+
+| eval | fr (§7b) | c_score_al |
+|---|---:|---:|
+| clean score | 0.8957 | 0.7553 |
+| ctl_empty agree | — | 0.3358 |
+| ctl_shuffle agree | — | 0.3345 |
+
+Misma firma que noul: agreement colapsa a la base rate del label de
+rechazo (~1/3 para rubric de 3 niveles; la referencia es índice 0 =
+nivel más bajo) — rechazo uniforme de evidencia corrupta en ambos
+modos. Costo mayor que en noul: −14pt en clean (vs −3.5pt), consistente
+con que score tiene más vías de sobre-rechazo (cualquier nivel alto
+reclasificado a 0). Los JSONs de score sí traen `train_overlap_check`.
+
+Estado 2026-10-08: ambos kinds completos. La decisión de si
+`c_*_al` reemplazan a `c_*`/`fr_*` para release queda abierta —
+grounding perfecto en controles a costa de clean (−3.5pt noul,
+−14pt score).
+
 ## 8. Siguiente
 
 1. Heads seleccionados: **`c_*`**, sin cambios respecto de v0.1.
@@ -263,3 +511,21 @@ mean±sd.
    quiere atribuir causalidad a DAPT, repetir con head-training igualado.
 5. Reevaluar flips no canónicos con la métrica corregida y reservar un
    test final independiente de la selección de candidatos.
+
+**Actualización 2026-10-02**: v0.2.3 publicado (mismos pesos `fr_*`;
+README/MODEL_CARD/manifests alineados). La línea activa es la fase
+qa-v2 (§7c): Phase-A diagnostics → `qa_build` → `qa_v2_train` frozen →
+compuerta LoRA → `qa_v2_eval`; ensemble de variantes de instrucción
+como segundo brazo. CI de pytest en `.github/workflows/test.yml`
+(corre la suite completa en CPU, ~13s). Artefactos ya des-trackeados
+(`dist/`, `paper/main.{aux,log,out}`, `evals/*.log` en .gitignore).
+
+**Actualización 2026-10-16**: v0.3.0 — release anti-leakage. Heads
+servidos: `alp25_{noul,score}` (retrain ρ=0.25 sobre la receta `fr`;
+controls a prior de rechazo, SciFact canónica 0.464→0.702) +
+`fr_choice` sin cambios. Temps 1.403/0.7641 fit en dev. La decisión de
+choice anti-leakage queda para el siguiente release: `alp25x`
+(counterfactual) ya supera a `fr` en GPQA-oracle (0.725 vs 0.695) pero
+compromete más en evidencia destruida (0.40–0.45 vs 0.26–0.32 de
+`alp25p`); trade-off documentado en `tab:antileak-choice`.
+

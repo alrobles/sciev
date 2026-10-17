@@ -198,6 +198,34 @@ def test_checkpoint_roundtrip(tmp_path):
     assert torch.allclose(model(ids), m2(ids))
 
 
+def test_hf_decision_ckpt_propagates_seq_len(tmp_path):
+    """load_decision must honor the seq_len declared in the checkpoint's
+    inference block instead of silently falling back to the HFBackbone
+    default — otherwise eval under-fits the token budget vs training."""
+    from unittest.mock import patch
+    from sciev.model import DecisionHead, load_decision
+
+    captured = {}
+
+    class StubBackbone:
+        def __init__(self, name_or_path, device="cpu", dtype="bfloat16",
+                     seq_len=2048, lora_adapter=None):
+            captured["seq_len"] = seq_len
+            self.tok_emb = torch.nn.Embedding(64, 32)
+
+    head = DecisionHead(32)
+    for declared, expected in ((4096, 4096), (None, 2048)):
+        p = tmp_path / f"decision_{declared}.pt"
+        ckpt = {"hf_backbone": "stub-model", "head": head.state_dict()}
+        if declared is not None:
+            ckpt["inference"] = {"seq_len": declared}
+        torch.save(ckpt, p)
+        with patch("sciev.model.HFBackbone", StubBackbone):
+            m2, h2 = load_decision(str(p), device="cpu")
+        assert captured["seq_len"] == expected
+        assert h2 is not None
+
+
 if __name__ == "__main__":
     fns = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for fn in fns:

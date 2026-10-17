@@ -266,7 +266,7 @@ def test_explicit_r1_legacy_path_is_marked_and_usage_is_real(monkeypatch, caplog
     assert "legacy" in caplog.text.lower()
     assert result.json()["usage"] == {
         "input_tokens": sum(ids.numel() for ids in backbone.seen),
-        "output_tokens": 0, "forward_passes": 3,
+        "output_tokens": 0, "forward_passes": 3, "billing_units": 3,
     }
     assert all(backbone.inference_flags)
 
@@ -323,3 +323,73 @@ def test_api_exactly_matches_shared_posterior_and_token_order_selection(monkeypa
     assert answers[0] == answers[1]
     assert normalize_spy.call_count == 2
     assert predict_spy.call_count == 2
+
+
+def test_health_endpoint_needs_no_engine(monkeypatch):
+    from sciev.serve import create_app
+
+    monkeypatch.delenv("SCIEV_MANIFEST", raising=False)
+    monkeypatch.delenv("REVJEV_CKPT", raising=False)
+    with TestClient(create_app()) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_request_temperature_scales_probabilities_and_validates_range():
+    from sciev.serve import create_app
+
+    engine = make_engine()
+    payload = {"state": "facts",
+               "questions": {"q": {"type": "choice", "instructions": "select",
+                                   "criteria": {"ant": None, "yak": None, "zebra": None}}}}
+    with TestClient(create_app(engine)) as client:
+        sharp = client.post("/v1/systemone", json={**payload, "temperature": 0.5})
+        flat = client.post("/v1/systemone", json={**payload, "temperature": 50})
+        assert sharp.status_code == flat.status_code == 200
+        for bad in (0, -1, 101, "hot"):
+            response = client.post("/v1/systemone", json={**payload, "temperature": bad})
+            assert response.status_code == 422, (bad, response.text)
+    sharp_max = max(sharp.json()["answers"]["q"]["probabilities"].values())
+    flat_max = max(flat.json()["answers"]["q"]["probabilities"].values())
+    assert sharp_max > flat_max
+    assert sharp.json()["usage"]["billing_units"] == 1
+
+
+def test_rank_endpoint_orders_candidates_and_rejects_duplicates():
+    from sciev.serve import create_app
+
+    engine = make_engine()
+    with TestClient(create_app(engine)) as client:
+        result = client.post("/v1/rank", json={
+            "context": "The passage describes photosynthesis.",
+            "question": "Which answer is correct?",
+            "answers": ["gamma decay", "alpha emission", "beta capture"]})
+        assert result.status_code == 200, result.text
+        body = result.json()
+        assert body["model"] == "synthetic-r2"
+        ranked = body["ranked"]
+        assert [entry["rank"] for entry in ranked] == [1, 2, 3]
+        assert {entry["candidate"] for entry in ranked} == {
+            "gamma decay", "alpha emission", "beta capture"}
+        probs = [entry["prob"] for entry in ranked]
+        assert probs == sorted(probs, reverse=True)
+        assert abs(sum(probs) - 1.0) < 1e-9
+        duplicate = client.post("/v1/rank", json={
+            "context": "ctx", "question": "pick", "answers": ["same", "same"]})
+        assert duplicate.status_code == 422
+        too_few = client.post("/v1/rank", json={
+            "context": "ctx", "question": "pick", "answers": ["only"]})
+        assert too_few.status_code == 422
+
+
+def test_rank_endpoint_requires_the_choice_head():
+    from sciev.serve import create_app
+    from sciev.model import DecisionHead
+
+    engine = make_engine(heads={"noul": DecisionHead(8)}, settings={"noul": {}})
+    with TestClient(create_app(engine)) as client:
+        response = client.post("/v1/rank", json={
+            "context": "ctx", "question": "pick", "answers": ["a", "b"]})
+    assert response.status_code == 422
+    assert engine.backbone.seen == []

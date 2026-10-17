@@ -12,15 +12,73 @@ General-purpose by design, with a scientific specialty: the heads are
 trained on passage-grounded scientific decisions and transfer zero-shot
 to general classification.
 
+## The System-One ecosystem
+
+System One is now an open, multi-implementation ecosystem: Jev (closed),
+OpenJev (third-party re-implementation on DiffusionGemma), and
+Contrastive-LM's **CLM-8B** (Apache-2.0 weights, bi-encoder projections
+over frozen Qwen3-8B). Sciev participates as the **masked-diffusion
+member on a non-Qwen backbone**: it serves the same typed-question wire
+contract (`/v1/systemone`, `/v1/rank`), so TypeSafe-style clients and
+ecosystem harnesses can address it the same way they address CLM.
+
+Where the implementations sit:
+
+| | sciev | CLM-8B |
+|---|---|---|
+| encoder | LLaDA-8B, masked diffusion | Qwen3-8B, causal LM |
+| state×option interaction | joint cross-encoding | bi-encoder dot product |
+| decision heads | 3 typed heads, ~100M total | 2 projection heads, ~40M |
+| training data | own conversions, hashed manifests, no proprietary-model outputs | Nemotron pairs + synthetic hard negatives + trajectories |
+| specialty | evidence-grounded scientific decisions | agentic trajectories, program verification |
+| audit trail | dataset/checkpoint fingerprints, disjoint-split protocol, fitted temperature + acceptance policy, declared known limits | paper-reported |
+
+The backbone diversity is a feature of the ecosystem, not a rivalry:
+CLM's heads are tied to the Qwen3-8B encoder, so environments whose
+approved-model lists or provenance policies exclude Qwen-family weights
+still have a wire-compatible option here. Their embedding-cache design
+keeps the latency advantage on repeated states and unrestricted K;
+sciev's release is bounded to ≤4 options per question (see known
+limits). We also run the CLM architecture on our own backbone
+(`sciev/biencoder.py`) as a matched-architecture control arm — same
+data, same cohorts — so the joint-encoding-vs-dot-product comparison
+inside the ecosystem is paired rather than confounded by encoder choice
+or corpus scale.
+
 Sciev uses a **masked-diffusion language model** (LLaDA-8B) and canonical
 option sorting. Distinct option token sequences produce the same model
 input under permutation; duplicate or truncated-to-identical options need
 an explicit tie policy if their external identifiers must be distinguished.
 
-## Results (v0.2, `systemone-v2` encoding, 3 seeds)
+## Results (v0.3, `systemone-v2` encoding)
 
-| eval | type | fr (release) mean ± sd | da (DAPT, experimental) |
+v0.3.0 ships **anti-leakage heads**: `noul` and `score` were retrained on a
+ρ=0.25 evidence-corruption mixture (for each clean row, 0.125 empty-evidence
+and 0.125 shuffled-evidence counterparts labeled with the rejection class),
+so corrupted evidence is rejected instead of pattern-matched on option-side
+cues. `choice` is unchanged (`fr_choice.pt`) — an anti-leakage choice head
+requires same-question confounders, which are covered in the manuscript but
+not yet in the served weights.
+
+| eval | type | v0.3 `alp25` | v0.2 `fr` (seed 7331) |
 |---|---|---:|---:|
+| sci battery elite (clean) | noul | 0.907 | 0.931 |
+| sci battery elite (clean) | score | **0.911** | 0.896 |
+| empty-evidence agreement | noul | **0.667** (prior) | 0.810 |
+| shuffled-evidence agreement | noul | **0.667** (prior) | 0.669 |
+| empty-evidence agreement | score | **0.336** (prior) | 0.575 |
+| shuffled-evidence agreement | score | **0.336** (prior) | 0.385 |
+| SciFact dev, canonical encoding | noul | **0.702** | 0.464 |
+| SciFact dev | score | 0.757 | 0.757 |
+
+Control rows report agreement with the original reference; the rejection
+class is the correct behavior under corrupted evidence, so values at the
+class prior (0.667 / 0.336) mark full rejection rather than failure.
+Calibration: dev-fitted temperatures 1.403 (noul) and 0.7641 (score).
+
+### v0.2 matched study (3 seeds, `fr` vs `da`)
+
+| eval | type | fr (v0.2 heads) mean ± sd | da (DAPT, experimental) |
 | sci battery elite | choice | **0.970 ± 0.017** | 0.961 ± 0.011 |
 | sci battery elite | noul | **0.925 ± 0.006** | 0.913 ± 0.007 |
 | sci battery elite | score | **0.859 ± 0.075** | 0.779 ± 0.109 |
@@ -96,13 +154,15 @@ fetched separately from HF. No DAPT adapter is required for the release.
 Install the package, download the release heads, and evaluate a prepared
 decision JSONL (the example assumes `my_decisions.jsonl` already exists).
 The same heads are also on Hugging Face at
-[`alrobles/sciev`](https://huggingface.co/alrobles/sciev) (frozen heads
-under `release/`, experimental adapted heads under `experimental/`).
+[`alrobles/sciev`](https://huggingface.co/alrobles/sciev) (current release
+heads under `release/` — `fr_choice.pt` plus `alp25_{noul,score}.pt`;
+superseded v0.2 `fr_{noul,score}.pt` remain in place for provenance, and
+experimental adapted heads are under `experimental/`).
 
 ```bash
 pip install sciev
-gh release download v0.2.3 --repo alrobles/sciev \
-    --pattern 'fr_*.pt' --dir release
+gh release download v0.3.0 --repo alrobles/sciev \
+    --pattern '*.pt' --dir release
 python -m sciev.eval \
     --ckpt release/fr_choice.pt --decision-type choice \
     --r2-mode spanpool --r2-layers=-1,-9,-17,-25 --canonical-order \
@@ -147,12 +207,15 @@ used separately with `sciev.train --ckpt`.
 
 ## Repo map
 
-| path | qué |
+| path | what |
 |---|---|
 | `sciev/model.py` | MdLMMoE + HFBackbone + heads + canonical layout |
 | `sciev/train.py` | head training (CE, ordinal, RL-lite) |
 | `sciev/eval.py` | acc/ECE/flip/auto@5%, temp-fit, remote API eval |
 | `sciev/dapt.py` | domain-adaptive pretraining (LoRA) |
+| `sciev/qa_train.py`, `sciev/qa_eval.py` | qa-v2 parametric-MCQA driver: budgeted training, disjoint temperature/policy fit |
+| `sciev/protocol.py` | split disjointness, dataset/checkpoint contracts, fingerprints |
+| `sciev/calibration.py` | dev-fitted temperature + acceptance-policy artifacts |
 | `data/` | battery builders + benchmark converters |
 | `scripts/*.slurm` | reproducible jobs (KU HPC) |
 | `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |

@@ -146,6 +146,44 @@ def test_checkpoint_disjointness_uses_recorded_training_data(tmp_path):
         assert_checkpoint_disjoint(ckpt, [dict(train_row, qid="other")])
 
 
+def test_training_resume_restores_optimizer_order_and_rng():
+    import copy
+    from sciev.model import DecisionHead
+
+    torch.manual_seed(41)
+    model = MdLMMoE(vocab=32, hidden=8, layers=1, heads=2, ff_mult=2,
+                   seq_len=32, n_experts=1, k=1)
+    initial = DecisionHead(8)
+    complete, resumed = copy.deepcopy(initial), copy.deepcopy(initial)
+    rows = [{"ctx": [1], "opts": [[3], [5]], "gold": 0},
+            {"ctx": [2], "opts": [[7], [6]], "gold": 1}]
+    args = SimpleNamespace(seed=1, freeze=True, head_lr=0.01, lr=0.01,
+                           orders=1, layers_list=(-1,), canonical_order=True,
+                           ordinal=0.0, steps=4, r2_mode="spanpool", rl=0.0,
+                           accum=1, warmup=4, soft_weight=0.0, soft_temp=1.0)
+    train_r2(model, complete, rows, args, "cpu")
+    saved = {}
+
+    def capture(step, model, head, optimizer, rng, order):
+        saved.update(step=step, optimizer=copy.deepcopy(optimizer.state_dict()),
+                     order=list(order), rng_state=rng.getstate(),
+                     torch_rng_state=torch.get_rng_state())
+
+    partial = SimpleNamespace(**{**vars(args), "steps": 2})
+    train_r2(model, resumed, rows, partial, "cpu", checkpoint_callback=capture)
+    train_r2(model, resumed, rows, args, "cpu", resume=saved)
+    for left, right in zip(complete.parameters(), resumed.parameters()):
+        assert torch.allclose(left, right, atol=1e-7)
+
+
+def test_recipe_steps_override_does_not_change_other_matched_settings():
+    from sciev.train import apply_scientific_recipe
+    args = SimpleNamespace(recipe="scientific-v1", decision_type="choice", steps=16000)
+    apply_scientific_recipe(args)
+    assert args.steps == 16000
+    assert args.freeze and args.canonical_order and args.head_kind == "attnpool"
+
+
 def test_partial_gradient_accumulation_is_not_dropped():
     from sciev.model import DecisionHead
 

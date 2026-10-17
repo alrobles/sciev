@@ -436,7 +436,8 @@ def load_decision(ckpt_path, config=None, device="cpu", lora_adapter=None):
     raw = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     head_sd = raw.get("head") if isinstance(raw, dict) else None
     if isinstance(raw, dict) and "hf_backbone" in raw:
-        model = HFBackbone(raw["hf_backbone"], device=device,
+        seq_len = (raw.get("inference") or {}).get("seq_len", 2048)
+        model = HFBackbone(raw["hf_backbone"], device=device, seq_len=seq_len,
                            lora_adapter=lora_adapter or raw.get("lora_adapter"))
     else:
         model = load_backbone(ckpt_path, config, device=device)

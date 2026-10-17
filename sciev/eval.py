@@ -388,7 +388,8 @@ def eval_decisions_ids(model, head, rows, device, mode="spanpool",
                     options_truncated += int(any(prepared.option_truncated))
                     records.append({
                         **{key: row[key] for key in ("qid", "kind", "pid", "split_group",
-                                                    "group_id", "option_keys") if key in row},
+                                                    "group_id", "option_keys", "sample_id",
+                                                    "content_hash", "decision_id", "source") if key in row},
                         "gold": row["gold"], "prediction": selected,
                         "probabilities": probs, "max_probability": max(probs),
                         "correct": int(selected == row["gold"]),

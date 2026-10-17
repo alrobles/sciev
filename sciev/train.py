@@ -109,7 +109,7 @@ def apply_scientific_recipe(args):
     args.canonical_order = recipe["canonical_order"]
     args.orders = recipe["orders"]
     args.head_kind = recipe["head_kind"]
-    if args.steps is None:
+    if getattr(args, "steps", None) is None:
         args.steps = recipe["steps"]
     args.head_lr = recipe["head_lr"]
     args.warmup = recipe["warmup"]
@@ -148,7 +148,7 @@ def r2_checkpoint(model, head, examples, args):
     return ckpt
 
 
-def train_r2(model, head, examples, args, device):
+def train_r2(model, head, examples, args, device, *, resume=None, checkpoint_callback=None):
     """CE on option logits; randomized option order each step.
 
     examples: [(ctx, [opt_ids...], gold_idx)] for pairs, or row dicts
@@ -170,7 +170,7 @@ def train_r2(model, head, examples, args, device):
     rng = _r.Random(args.seed)
     params = [{"params": head.parameters(), "lr": args.head_lr}]
     if not args.freeze:
-        params.append({"params": model.parameters(), "lr": args.lr})
+        params.append({"params": [p for p in model.parameters() if p.requires_grad], "lr": args.lr})
     else:
         for p in model.parameters():
             p.requires_grad_(False)
@@ -179,8 +179,23 @@ def train_r2(model, head, examples, args, device):
     head.train()
     t0 = time.time()
     order = list(range(len(examples)))
+    start_step = 0
+    if resume is not None:
+        start_step = resume["step"]
+        if type(start_step) is not int or not 0 <= start_step <= args.steps:
+            raise ValueError("resume step is outside the requested training budget")
+        if start_step % args.accum:
+            raise ValueError("resume must be at a complete gradient-accumulation boundary")
+        if sorted(resume["order"]) != order:
+            raise ValueError("resume example order does not match this dataset")
+        order = list(resume["order"])
+        opt.load_state_dict(resume["optimizer"])
+        rng.setstate(resume["rng_state"])
+        torch.set_rng_state(resume["torch_rng_state"].cpu())
+        if str(device).startswith("cuda") and "cuda_rng_state" in resume:
+            torch.cuda.set_rng_state_all(resume["cuda_rng_state"])
     acc_hist = []
-    for step in range(args.steps):
+    for step in range(start_step, args.steps):
         if step % len(order) == 0:
             rng.shuffle(order)
         ex = examples[order[step % len(order)]]
@@ -244,13 +259,21 @@ def train_r2(model, head, examples, args, device):
                    * logits.unsqueeze(0)).sum(-1).mean()
             loss = loss + args.rl * pg
         window_size = min(args.accum, args.steps - (step // args.accum) * args.accum)
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"nonfinite training loss at step {step}")
         (loss / window_size).backward()
         if (step + 1) % args.accum == 0 or step + 1 == args.steps:
             lr_scale = min(1.0, (step + 1) / max(1, args.warmup))
             for g, base in zip(opt.param_groups, [args.head_lr, args.lr][:len(params)]):
                 g["lr"] = base * lr_scale
+            if getattr(args, "grad_clip", None):
+                torch.nn.utils.clip_grad_norm_(
+                    [p for group in opt.param_groups for p in group["params"]], args.grad_clip,
+                    error_if_nonfinite=True)
             opt.step()
             opt.zero_grad(set_to_none=True)
+            if checkpoint_callback is not None and checkpoint_callback(step + 1, model, head, opt, rng, order):
+                break
         acc_hist.append(int(logits.argmax().item() == gold))
         if step % 50 == 0:
             acc = sum(acc_hist[-200:]) / min(len(acc_hist), 200)
@@ -309,6 +332,9 @@ def main():
                     help="LoRA adapter dir (e.g. DAPT output) merged into the "
                          "HF backbone before training")
     ap.add_argument("--config", default=None)
+    ap.add_argument("--seq-len", type=int, default=2048,
+                    help="model token budget for hf-backbone (ctx cap = "
+                         "seq_len // 2; pair decisions may need >2048)")
     ap.add_argument("--tokenizer", default="GSAI-ML/LLaDA-8B-Instruct")
     ap.add_argument("--out", required=True)
     ap.add_argument("--steps", type=int, default=None,
@@ -349,6 +375,7 @@ def main():
         if args.hf_backbone:
             from .model import HFBackbone
             model = HFBackbone(args.hf_backbone, device=args.device,
+                               seq_len=args.seq_len,
                                lora_adapter=args.lora_adapter)
         else:
             model = load_backbone(args.ckpt, cfg, device=args.device)
@@ -397,6 +424,8 @@ def main():
         return
 
     # ---------- R1 path: decisions JSONL ----------
+    if args.steps is None:
+        args.steps = 2000
     if not args.data:
         ap.error("--data or --pairs-train required")
     from transformers import AutoTokenizer

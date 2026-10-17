@@ -8,6 +8,7 @@ import pytest
 from data import build_sci_decisions as sci
 from data import build_toolcall_decisions as tools
 from data import convert_benchmarks as benchmarks
+from data import build_qa_choice as mcqa
 from data.teacher_label import render_prompt
 
 
@@ -27,6 +28,96 @@ def qa(pid, answer, passage=None, **metadata):
 
 def scientific_rows():
     return [qa(str(i), f"The result is {10 * (i + 1)} units.") for i in range(6)]
+
+
+def mc_item(question, split="train", source="arc_easy", gold=0, options=None):
+    return {"question": question, "options": options or ["alpha", "beta", "gamma", "delta"],
+            "gold": gold, "split": split, "source": source,
+            "src_id": f"{source}_{split}_{question}"}
+
+
+def test_mcqa_partitions_globally_and_reserves_public_test_questions():
+    rows = [mc_item("shared"), mc_item("shared", "validation", "mmlu_aux"),
+            mc_item("shared", "test", "sciq", options=["alpha", "beta", "gamma", "epsilon"]),
+            mc_item("dev-only", "validation"), mc_item("train-only")]
+    splits, exclusions = mcqa.partition_items(rows, [])
+    assert [r["question"] for r in splits["train"]] == ["train-only"]
+    assert [r["question"] for r in splits["dev"]] == ["dev-only"]
+    assert [r["question"] for r in splits["eval"]] == ["shared"]
+    assert sum(e["reason"] == "heldout_question_overlap"
+               for entries in exclusions.values() for e in entries) == 2
+    groups = {name: {r["split_group"] for r in values} for name, values in splits.items()}
+    assert groups["train"].isdisjoint(groups["dev"] | groups["eval"])
+    assert groups["dev"].isdisjoint(groups["eval"])
+
+
+def test_mcqa_removes_entire_conflicting_label_groups():
+    rows = [mc_item("conflict", gold=0), mc_item("conflict", source="mmlu_aux", gold=1),
+            mc_item("keep"), mc_item("keep", source="mmlu_aux")]
+    splits, exclusions = mcqa.partition_items(rows, [])
+    assert [r["question"] for r in splits["train"]] == ["keep"]
+    assert sorted(e["reason"] for e in exclusions["train"]) == [
+        "conflicting_gold", "conflicting_gold", "duplicate_record"]
+
+
+@pytest.mark.parametrize("patch", [
+    {"gold": -1}, {"gold": 4}, {"gold": True}, {"question": " "},
+    {"options": ["", "b", "c", "d"]}, {"options": ["a", " a ", "c", "d"]},
+    {"options": [None, "b", "c", "d"]}, {"choice_type": "multi"},
+])
+def test_mcqa_rejects_malformed_and_multiple_answer_records(patch):
+    splits, exclusions = mcqa.partition_items([dict(mc_item("q"), **patch)], [])
+    assert not any(splits.values())
+    assert len(exclusions["train"]) == 1
+
+
+def test_mcqa_gpqa_screen_is_label_free_and_applies_to_all_splits():
+    question = "Which enzyme participates in cellular glucose metabolism?"
+    refs = [mcqa._tokset(question)]
+    rows = [mc_item(question, split=split) for split in ("train", "validation", "test")]
+    splits, exclusions = mcqa.partition_items(rows, refs)
+    assert not any(splits.values())
+    assert all(e["reason"] == "gpqa_near_duplicate"
+               for entries in exclusions.values() for e in entries)
+
+
+def test_mcqa_source_identity_distinguishes_split_local_row_numbers():
+    from sciev.protocol import assert_disjoint_splits
+
+    records = [dict(mc_item(f"Question {split}", split),
+                    source_id=mcqa.source_identity({}, split, 0))
+               for split in ("train", "validation", "test")]
+    splits, exclusions = mcqa.partition_items(records, [])
+    encoded = {name: mcqa.encode_rows(rows, name, CharTokenizer(), random.Random(1), exclusions[name])[0]
+               for name, rows in splits.items()}
+    assert assert_disjoint_splits(encoded)["status"] == "verified"
+    assert mcqa.source_identity({"id": "global-id"}, "train", 1) == "global-id"
+    assert mcqa.source_identity({"id": "global-id"}, "test", 2) == "global-id"
+
+
+def test_mcqa_preserves_layout_in_question_and_option_text():
+    question = "Which output?\nif True:\n    print(1)\nprint(2)"
+    options = ["1\n2", "1", "2", "nothing"]
+    splits, exclusions = mcqa.partition_items([mc_item(question, options=options)], [])
+    assert splits["train"][0]["question"] == question
+    assert splits["train"][0]["options"] == options
+    _, texts = mcqa.encode_rows(splits["train"], "train", CharTokenizer(), random.Random(1), exclusions["train"])
+    assert texts[0]["state"] == f"Question: {question}"
+
+
+def test_mcqa_global_source_ids_reserve_changed_question_versions():
+    rows = [dict(mc_item("First wording"), source_id="same-source-id"),
+            dict(mc_item("Changed wording", "test"), source_id="same-source-id")]
+    splits, _ = mcqa.partition_items(rows, [])
+    assert not splits["train"]
+    assert len(splits["eval"]) == 1
+
+
+def test_mcqa_normalizes_question_whitespace_before_grouping():
+    splits, _ = mcqa.partition_items([
+        mc_item("  What is\tthe result? "), mc_item("What is the result?", "test")], [])
+    assert not splits["train"]
+    assert len(splits["eval"]) == 1
 
 
 def assert_paired(ids, texts):
