@@ -79,6 +79,7 @@ Calibration: dev-fitted temperatures 1.403 (noul) and 0.7641 (score).
 ### v0.2 matched study (3 seeds, `fr` vs `da`)
 
 | eval | type | fr (v0.2 heads) mean ± sd | da (DAPT, experimental) |
+|---|---|---:|---:|
 | sci battery elite | choice | **0.970 ± 0.017** | 0.961 ± 0.011 |
 | sci battery elite | noul | **0.925 ± 0.006** | 0.913 ± 0.007 |
 | sci battery elite | score | **0.859 ± 0.075** | 0.779 ± 0.109 |
@@ -94,11 +95,13 @@ shuffled passages) show `choice` retains option-side leakage: the
 frozen head still agrees with the reference on **0.875** of items after
 the passage is removed (adapted 0.806), while `score` is much more
 sensitive to evidence changes; see the paper and `manifests/` in the
-release assets. The [revised manuscript](https://sciev.org/static/sciev-paper.pdf),
+release assets. The [revised manuscript](https://sciev.org/static/sciev-paper.pdf?v=030),
 in preparation for arXiv submission, reports this matched study with
 evidence controls and per-seed values.
 Earlier v0.1.1 zero-shot numbers (SST-2 0.93, AG News 0.85)
 remain archived in the release JSONs.
+
+<details><summary>Archived v0.1.x benchmark table (provenance)</summary>
 
 | benchmark (archived v0.1.x, `c_*` heads) | type | n | acc | ECE | auto@5%err |
 |---|---|---:|---:|---:|---:|
@@ -113,6 +116,8 @@ remain archived in the release JSONs.
 | AG News (zero-shot) | choice | 7600 | **0.8537** | 0.0556 | 0.3674 |
 | Enron spam (zero-shot) | choice | 2000 | 0.7510 | 0.1046 | 0.0000 |
 | Banking77 (K=77) | choice | 3080 | 0.2289 | 0.0809 | 0.0195 |
+
+</details>
 
 The archived v0.1.x table is kept for provenance; `paper/results.json`
 records source hashes, metrics, and training settings. Caveat: the
@@ -129,8 +134,8 @@ v0.2 fits temperatures on dev data only, and calibration artifacts are
 bound to the checkpoint SHA-256.
 
 Known limits: weak K>4 performance (Banking77, v0.1.x), low GPQA
-accuracy, weaker elite score than choice, and the option-side leakage
-quantified by the evidence controls.
+accuracy, and residual option-side leakage in `choice` (documented in
+the manuscript; the v0.3 `alp25` heads removed it for `noul`/`score`).
 
 ## Architecture
 
@@ -181,15 +186,41 @@ Converters for GPQA / SciFact / SST-2 / AG News / Enron / Banking77 live
 in `data/convert_benchmarks.py`; the scientific battery builder is
 `data/build_sci_decisions.py`.
 
+## Serving the wire contract
+
+`sciev[serve]` exposes the TypeSafe-style HTTP API — `POST /v1/systemone`,
+`POST /v1/rank`, `GET /v1/models`, `GET /health` — over a manifest that
+binds backbone, head files and fitted temperatures (layout matches
+`manifest.json` in the HF repo):
+
+```bash
+pip install "sciev[serve]"
+SCIEV_MANIFEST=manifest.json uvicorn sciev.serve:app --port 8009
+
+curl -s localhost:8009/v1/systemone -H 'content-type: application/json' -d '{
+  "state": "The passage under decision.",
+  "questions": {"q1": {"type": "noul",
+    "instructions": "Does the passage support the claim?",
+    "criteria": {"true": "supported", "false": "not supported"}}}
+}'
+```
+
+Each answer carries calibrated `probabilities`, the `choice`/`noul`/
+`score` decision and a `confidence` concentration score — one forward
+pass per question. The server has no auth; keep it on localhost or
+behind an authenticated proxy. A gated public deployment lives at
+[sciev.ecoseek.org](https://sciev.ecoseek.org) (GitHub login).
+
 ## Domain adaptation (DAPT)
 
 `sciev/dapt.py` implements an experimental masked-token LoRA
 adaptation loop for HF backbones (requires PEFT). Under the matched
 comparison (same recipe, seeds and `systemone-v2` data), the adapted
 backbone improves out-of-domain verification (SciFact noul +22.6pt) but
-degrades in-domain ordinal scoring — the released heads therefore stay
-frozen (`fr_*`), with `da_*` published as an experimental arm. See the
-matched table and protocol caveats in the paper.
+degrades in-domain ordinal scoring — the release therefore stays on the
+frozen backbone (`fr_choice` + `alp25_{noul,score}`), with `da_*`
+published as an experimental arm. See the matched table and protocol
+caveats in the paper.
 
 ```bash
 python -m sciev.dapt \
@@ -216,10 +247,12 @@ used separately with `sciev.train --ckpt`.
 | `sciev/qa_train.py`, `sciev/qa_eval.py` | qa-v2 parametric-MCQA driver: budgeted training, disjoint temperature/policy fit |
 | `sciev/protocol.py` | split disjointness, dataset/checkpoint contracts, fingerprints |
 | `sciev/calibration.py` | dev-fitted temperature + acceptance-policy artifacts |
+| `sciev/serve.py`, `sciev/inference.py` | `/v1/systemone` + `/v1/rank` wire API, manifest-bound engine |
+| `sciev/biencoder.py` | CLM-architecture control arm (InfoNCE bi-encoder, matched data) |
 | `data/` | battery builders + benchmark converters |
 | `scripts/*.slurm` | reproducible jobs (KU HPC) |
 | `docs/PROJECT-STATUS.md` | roadmap, milestones, design decisions |
-| `paper/main.tex` | archived release draft; current manuscript served at [sciev.org](https://sciev.org/static/sciev-paper.pdf) |
+| `paper/main.tex` | archived release draft; current manuscript served at [sciev.org](https://sciev.org/static/sciev-paper.pdf?v=030) |
 
 ## Verification
 
