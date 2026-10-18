@@ -329,6 +329,28 @@ def test_manifest_one_backbone_strict_heads_weights_only_cpu(bundle, monkeypatch
     assert str(save().parent) not in json.dumps(info)
 
 
+def test_manifest_resolves_heads_through_symlinks(bundle, tmp_path):
+    from sciev.inference import DecisionEngine
+
+    manifest, _, save, _ = bundle
+    manifest_path = save()
+    blobs = tmp_path / "blobs"
+    blobs.mkdir()
+    release = tmp_path / "release"
+    release.mkdir()
+    for file in tmp_path.glob("*.pt"):
+        file.rename(blobs / file.name)
+        (release / file.name).symlink_to(blobs / file.name)
+    manifest_path.rename(blobs / manifest_path.name)
+    release_manifest = release / manifest_path.name
+    release_manifest.symlink_to(blobs / manifest_path.name)
+
+    factory = Mock(side_effect=lambda *args, **kwargs: TinyBackbone(seq_len=kwargs["seq_len"]))
+    engine = DecisionEngine.from_manifest(release_manifest, device="cpu",
+                                          backbone_factory=factory, tokenizer=FakeTokenizer())
+    assert engine.model_info()["available_types"] == ["choice", "noul", "score"]
+
+
 def test_all_hashes_checked_before_deserialization_or_model_load(bundle, monkeypatch):
     from sciev.inference import DecisionEngine
 

@@ -1,6 +1,6 @@
 [project]
 name = "sciev"
-version = "0.3.0"
+version = "0.3.1"
 description = "Typed decision heads on frozen masked-diffusion backbones with held-out calibration."
 readme = "README.md"
 requires-python = ">=3.10"

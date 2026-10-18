@@ -1,0 +1,5 @@
+sciev==0.3.1
+transformers>=4.46
+huggingface_hub>=0.26
+spaces
+gradio>=5.0

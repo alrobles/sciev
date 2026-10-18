@@ -285,6 +285,7 @@ class DecisionEngine:
     def from_manifest(cls, manifest_path, *, device=None, allow_legacy_encoding=False,
                       tokenizer=None, backbone_factory=None, tokenizer_factory=None):
         path = Path(manifest_path).expanduser().resolve()
+        base = Path(manifest_path).expanduser().parent
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("manifest must be an object")
@@ -304,7 +305,7 @@ class DecisionEngine:
         dtype = manifest.get("dtype", "bfloat16")
         if dtype not in ("float32", "float16", "bfloat16"):
             raise ValueError("dtype must be float32, float16, or bfloat16")
-        adapter = _adapter_path(manifest.get("lora_adapter"), path.parent)
+        adapter = _adapter_path(manifest.get("lora_adapter"), base)
         specs = manifest.get("heads")
         if not isinstance(specs, dict) or not specs or set(specs) - set(QUESTION_TYPES):
             raise ValueError("manifest heads must declare available choice, noul, or score heads")
@@ -319,7 +320,7 @@ class DecisionEngine:
             filename = spec.get("file")
             if not isinstance(filename, str) or not filename:
                 raise ValueError(f"{kind} head requires a checkpoint file")
-            files[kind] = (path.parent / Path(filename).expanduser()).resolve()
+            files[kind] = (base / Path(filename).expanduser()).resolve()
             expected = spec.get("sha256")
             if "sha256" in spec:
                 if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
@@ -340,7 +341,7 @@ class DecisionEngine:
                 checkpoint = torch.load(file, weights_only=True, map_location="cpu")
             except Exception as exc:
                 raise ValueError(f"{kind} checkpoint failed weights-only deserialization") from exc
-            _validate_checkpoint(checkpoint, specs[kind], settings[kind], config, adapter, path.parent,
+            _validate_checkpoint(checkpoint, specs[kind], settings[kind], config, adapter, base,
                                  allow_legacy_encoding=allow_legacy_encoding)
             head = _load_head(checkpoint["head"], settings[kind])
             heads[kind] = head
