@@ -7,7 +7,7 @@ sdk: gradio
 app_file: app.py
 pinned: false
 license: apache-2.0
-short_description: Typed decision heads (choice/noul/score) on a frozen LLaDA-8B backbone — one forward pass per question, no generation
+short_description: Typed decisions on LLaDA-8B, no generation
 ---
 
 # Sciev — Typed Decisions in One Forward Pass
